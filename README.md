@@ -2,6 +2,15 @@
 
 [TOC]
 
+## Project Template
+
+This repo is scaffolded as follows:
+
+- [`database/schema.sql`](database/schema.sql) — MySQL DDL for the portfolio data, staged (STAGE 0 → 1 → 2) so you start minimal and grow it. Run it in MySQL Workbench.
+- [`database/seed_data.sql`](database/seed_data.sql) — sample holdings to test against.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — technical overview: where price data comes from, how performance is calculated, suggested REST endpoints.
+- `backend/`, `frontend/` — placeholders until the team picks a language/framework.
+
 ## Overview
 
 Your team is challenged with designing an application to manage a financial portfolio.
