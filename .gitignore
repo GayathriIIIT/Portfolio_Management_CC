@@ -12,6 +12,13 @@ dist/
 
 # Compiled Python bytecode
 *.py[cod]
+__pycache__/
+
+# Python virtual environments / env files
+.venv/
+venv/
+.env
+.pytest_cache/
 
 # Log files
 *.log
