@@ -199,6 +199,29 @@ def _serialize_portfolio(portfolio, include_holdings=True):
     return data
 
 
+def _serialize_transaction(txn):
+    return {
+        "id": txn.id,
+        "symbol": txn.security.symbol,
+        "type": txn.txn_type,
+        "quantity": float(txn.quantity),
+        "price": float(txn.price),
+        "fees": float(txn.fees),
+        "executed_at": txn.executed_at.isoformat(),
+    }
+
+
+@bp.get("/<int:portfolio_id>/transactions")
+def get_portfolio_transactions(portfolio_id):
+    _get_portfolio_or_404(portfolio_id)
+    transactions = (
+        PortfolioTransaction.query.filter_by(portfolio_id=portfolio_id)
+        .order_by(PortfolioTransaction.executed_at.desc())
+        .all()
+    )
+    return jsonify([_serialize_transaction(txn) for txn in transactions])
+
+
 # ---------------------------------------------------------------------------
 # Portfolio CRUD
 # ---------------------------------------------------------------------------
