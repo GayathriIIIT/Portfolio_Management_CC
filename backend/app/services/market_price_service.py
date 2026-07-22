@@ -122,3 +122,11 @@ def get_market_price_service(ttl_seconds=None):
     elif ttl_seconds is not None:
         _default_service.ttl_seconds = ttl_seconds
     return _default_service
+
+
+def fetch_realtime_quote(symbol):
+    """Force a fresh yfinance fetch bypassing the service cache.
+
+    Returns the same dict as `_fetch_quote` or raises `UnknownTickerError`.
+    """
+    return _fetch_quote(symbol)
