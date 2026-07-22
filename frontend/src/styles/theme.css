@@ -1,0 +1,40 @@
+:root {
+  --lavender-50: #f6f4fb;
+  --lavender-100: #efe7f8;
+  --lavender-200: #ddd2f0;
+  --lavender-300: #c8b1ea;
+  --lavender-400: #b493e0;
+  --lavender-500: #9e75d6;
+  --lavender-600: #7e53c0;
+  --lavender-700: #623aa2;
+  --lavender-800: #48287a;
+  --lavender-900: #2f194f;
+
+  --white: #ffffff;
+  --ice: #eef2ff;
+  --surface: rgba(255, 255, 255, 0.82);
+  --surface-strong: rgba(255, 255, 255, 0.96);
+  --surface-soft: rgba(248, 244, 255, 0.70);
+
+  --gain: #3a7f65;
+  --loss: #b8506b;
+
+  --radius-sm: 8px;
+  --radius-md: 18px;
+  --radius-lg: 28px;
+  --radius-full: 999px;
+
+  --shadow-sm: 0 12px 26px rgba(75, 44, 144, 0.09);
+  --shadow-md: 0 24px 48px rgba(75, 44, 144, 0.14);
+  --shadow-lg: 0 42px 82px rgba(37, 18, 88, 0.18);
+  --shadow-glow: 0 0 68px rgba(158, 117, 214, 0.22);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+}

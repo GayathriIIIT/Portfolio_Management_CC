@@ -16,6 +16,7 @@ class PortfolioTransaction(db.Model):
         db.BigInteger, db.ForeignKey("portfolio.id", ondelete="CASCADE"), nullable=False
     )
     security_id = db.Column(db.BigInteger, db.ForeignKey("security.id"), nullable=False)
+    security = db.relationship("Security")
     txn_type = db.Column(db.String(16), nullable=False)
     quantity = db.Column(db.Numeric(18, 4), nullable=False)
     price = db.Column(db.Numeric(18, 4), nullable=False)
