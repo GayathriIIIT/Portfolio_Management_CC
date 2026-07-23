@@ -166,24 +166,96 @@ def _persist_points(security_id, points, db_session=None):
     session.commit()
 
 
+def _get_series_from_db(security_id, range_key, db_session=None):
+    session = db_session or db.session
+    if session is None:
+        return []
+
+    normalized_range = (range_key or "1d").lower()
+    if normalized_range == "1d":
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    elif normalized_range == "7d":
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+
+    rows = (
+        session.query(MarketPrice)
+        .filter(MarketPrice.security_id == security_id, MarketPrice.as_of >= cutoff)
+        .order_by(MarketPrice.as_of.asc())
+        .all()
+    )
+
+    return [
+        {"timestamp": row.as_of, "price": float(row.price), "source": row.source or "db"}
+        for row in rows
+    ]
+
+
+def _sample_intraday_points(history, target_count=4):
+    if history.empty:
+        return []
+
+    timestamps = []
+    prices = []
+    for timestamp, row in history.iterrows():
+        price = row.get("Close")
+        if price is None:
+            continue
+        ts = _coerce_utc_datetime(timestamp)
+        if ts is None:
+            continue
+        timestamps.append(ts)
+        prices.append(float(price))
+
+    if not timestamps:
+        return []
+
+    if len(timestamps) <= target_count:
+        return [
+            {"timestamp": ts, "price": price, "source": "yahoo"}
+            for ts, price in zip(timestamps, prices)
+        ]
+
+    indices = []
+    for offset in range(target_count):
+        index = int(round(offset * (len(timestamps) - 1) / (target_count - 1)))
+        if indices and index <= indices[-1]:
+            index = indices[-1] + 1
+        if index >= len(timestamps):
+            index = len(timestamps) - 1
+        indices.append(index)
+
+    return [
+        {"timestamp": timestamps[index], "price": prices[index], "source": "yahoo"}
+        for index in indices
+    ]
+
+
 def collect_and_store_price_series(symbol, security_id, range_key="1d", db_session=None):
     """Collect a chart-ready series for a symbol and persist it for analytics reuse."""
     normalized_range = (range_key or "1d").lower()
+
+    existing_points = _get_series_from_db(security_id, normalized_range, db_session=db_session)
+    if normalized_range == "1d" and len(existing_points) >= 4:
+        return [
+            {"timestamp": item["timestamp"].isoformat().replace("+00:00", "Z"), "price": item["price"]}
+            for item in existing_points
+        ]
+
+    if normalized_range != "1d" and existing_points:
+        return [
+            {"timestamp": item["timestamp"].isoformat().replace("+00:00", "Z"), "price": item["price"]}
+            for item in existing_points
+        ]
+
     ticker = yf.Ticker(symbol)
 
     if normalized_range == "1d":
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             history = ticker.history(period="1d", interval="5m", auto_adjust=False)
 
-        points = []
-        for timestamp, row in history.iterrows():
-            price = row.get("Close")
-            if price is None:
-                continue
-            ts = _coerce_utc_datetime(timestamp)
-            if ts is None:
-                continue
-            points.append({"timestamp": ts, "price": float(price), "source": "yahoo"})
+        points = _sample_intraday_points(history, target_count=4)
     else:
         window_days = 7 if normalized_range == "7d" else 30 if normalized_range == "1m" else 1
         cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
