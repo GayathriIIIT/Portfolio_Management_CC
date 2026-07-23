@@ -13,6 +13,9 @@ import io
 
 import yfinance as yf
 
+from app.extensions import db
+from app.models.market_price import MarketPrice
+
 
 class UnknownTickerError(ValueError):
     """Raised when yfinance has no usable data for a symbol."""
@@ -126,6 +129,89 @@ def get_historical_price(symbol, trade_date, price_type="close"):
     return float(price)
 
 
+def _coerce_utc_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        timestamp = value
+    else:
+        timestamp = getattr(value, "to_pydatetime", lambda: value)()
+        if not isinstance(timestamp, datetime):
+            return None
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def _persist_points(security_id, points, db_session=None):
+    session = db_session or db.session
+    if session is None:
+        return
+
+    for item in points:
+        timestamp = _coerce_utc_datetime(item.get("timestamp"))
+        if timestamp is None:
+            continue
+        existing = session.query(MarketPrice).filter_by(security_id=security_id, as_of=timestamp).first()
+        if existing is not None:
+            continue
+        session.add(
+            MarketPrice(
+                security_id=security_id,
+                price=float(item["price"]),
+                as_of=timestamp,
+                source=item.get("source", "yahoo"),
+            )
+        )
+    session.commit()
+
+
+def collect_and_store_price_series(symbol, security_id, range_key="1d", db_session=None):
+    """Collect a chart-ready series for a symbol and persist it for analytics reuse."""
+    normalized_range = (range_key or "1d").lower()
+    ticker = yf.Ticker(symbol)
+
+    if normalized_range == "1d":
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            history = ticker.history(period="1d", interval="5m", auto_adjust=False)
+
+        points = []
+        for timestamp, row in history.iterrows():
+            price = row.get("Close")
+            if price is None:
+                continue
+            ts = _coerce_utc_datetime(timestamp)
+            if ts is None:
+                continue
+            points.append({"timestamp": ts, "price": float(price), "source": "yahoo"})
+    else:
+        window_days = 7 if normalized_range == "7d" else 30 if normalized_range == "1m" else 1
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            history = ticker.history(period="1mo", interval="1d", auto_adjust=False)
+
+        points = []
+        for timestamp, row in history.iterrows():
+            price = row.get("Close")
+            if price is None:
+                continue
+            ts = _coerce_utc_datetime(timestamp)
+            if ts is None or ts < cutoff:
+                continue
+            points.append({"timestamp": ts, "price": float(price), "source": "yahoo"})
+
+    if points:
+        _persist_points(security_id, points, db_session=db_session)
+    return [
+        {
+            "timestamp": item["timestamp"].isoformat().replace("+00:00", "Z"),
+            "price": item["price"],
+        }
+        for item in points
+    ]
+
+
 class MarketPriceService:
     """Process-local cache of `{symbol: {price, fetched_at, name, exchange, currency, sector}}`."""
 
@@ -144,6 +230,12 @@ class MarketPriceService:
             return entry
 
         quote = _fetch_quote(symbol)
+        entry = {**quote, "fetched_at": datetime.now(timezone.utc)}
+        self._cache[symbol] = entry
+        return entry
+
+    def cache_quote(self, symbol, quote):
+        symbol = symbol.upper()
         entry = {**quote, "fetched_at": datetime.now(timezone.utc)}
         self._cache[symbol] = entry
         return entry

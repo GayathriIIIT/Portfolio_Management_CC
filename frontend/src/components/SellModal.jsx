@@ -1,11 +1,24 @@
 import { useState } from 'react'
 import ErrorBanner from './ErrorBanner'
 
-export default function SellModal({ holding, onSellPartial, onSellAll, onClose }) {
+export default function SellModal({ holding, onSellPartial, onSellAll, onRefreshPrice, onClose }) {
   const [mode, setMode] = useState('partial')
   const [sellQty, setSellQty] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [refreshingPrice, setRefreshingPrice] = useState(false)
+
+  async function handleRefresh() {
+    setError('')
+    setRefreshingPrice(true)
+    try {
+      await onRefreshPrice(holding.symbol)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setRefreshingPrice(false)
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -39,15 +52,46 @@ export default function SellModal({ holding, onSellPartial, onSellAll, onClose }
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-        <h3>Sell {holding.symbol}</h3>
+        <div className="modal-head">
+          <div>
+            <h3>Sell {holding.symbol}</h3>
+            <p className="hint">Review the most recent market value, cost basis, and unrealized profit before closing a position.</p>
+          </div>
+        </div>
         <ErrorBanner message={error} />
         <form onSubmit={handleSubmit}>
           <div className="field">
-            <label>Current market price</label>
+            <div className="price-row">
+              <label>Current market price</label>
+              <button type="button" className="icon-button" onClick={handleRefresh} disabled={refreshingPrice} title={`Refresh ${holding.symbol} price`}>
+                {refreshingPrice ? '…' : '↻'}
+              </button>
+            </div>
             <div className="price-display">
               ${holding.current_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="hint">The backend will use the latest market quote if the price is omitted.</div>
+          </div>
+
+          <div className="sell-summary-grid">
+            <div>
+              <div className="label">Held quantity</div>
+              <strong>{holding.quantity}</strong>
+            </div>
+            <div>
+              <div className="label">Avg. cost</div>
+              <strong>${holding.purchase_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+            </div>
+            <div>
+              <div className="label">Market value</div>
+              <strong>${holding.market_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+            </div>
+            <div>
+              <div className="label">Unrealized P/L</div>
+              <strong className={holding.unrealized_pl >= 0 ? 'pl-gain' : 'pl-loss'}>
+                {holding.unrealized_pl >= 0 ? '+' : ''}${holding.unrealized_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </strong>
+            </div>
           </div>
           <div className="radio-row">
             <label>

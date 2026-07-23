@@ -4,7 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from app.api.errors import ApiError, NotFoundError
 from app.extensions import db
-from app.models import Portfolio, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
+from app.models import MarketPrice, Portfolio, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
 from app.services import market_price_service
 from app.services.market_price_service import (
     UnknownTickerError,
@@ -313,7 +313,7 @@ def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None):
 # Serialization
 # ---------------------------------------------------------------------------
 
-def _serialize_portfolio(portfolio, include_holdings=True):
+def _serialize_portfolio(portfolio, include_holdings=True, override_prices=None):
     data = {
         "id": portfolio.id,
         "owner": portfolio.owner,
@@ -322,7 +322,7 @@ def _serialize_portfolio(portfolio, include_holdings=True):
         "created_at": portfolio.created_at.isoformat() if portfolio.created_at else None,
     }
     if include_holdings:
-        holdings = [_serialize_holding(h) for h in portfolio.holdings]
+        holdings = [_serialize_holding(h, override_prices=override_prices) for h in portfolio.holdings]
         data["holdings"] = holdings
         data["total_value"] = sum(h["market_value"] for h in holdings)
     else:
@@ -386,6 +386,115 @@ def get_portfolio(portfolio_id):
 def get_portfolio_analytics(portfolio_id):
     portfolio = _get_portfolio_or_404(portfolio_id)
     return jsonify(_compute_portfolio_metrics(portfolio))
+
+
+@bp.get("/<int:portfolio_id>/analytics/chart")
+def get_portfolio_chart_data(portfolio_id):
+    portfolio = _get_portfolio_or_404(portfolio_id)
+
+    range_key = request.args.get("range", "1d")
+    if isinstance(range_key, str):
+        range_key = range_key.strip().lower()
+    if range_key not in {"1d", "7d", "1m"}:
+        raise ApiError("'range' must be one of '1d', '7d', or '1m'", status_code=400)
+
+    series = []
+    for holding in portfolio.holdings:
+        if holding.security.type in {"CASH", "BOND"}:
+            continue
+        points = market_price_service.collect_and_store_price_series(
+            holding.security.symbol,
+            holding.security_id,
+            range_key,
+            db_session=db.session,
+        )
+        series.append({"symbol": holding.security.symbol, "points": points})
+
+    return jsonify(
+        {
+            "portfolio_id": portfolio.id,
+            "range": range_key,
+            "series": series,
+            "points": series[0]["points"] if series else [],
+        }
+    )
+
+
+@bp.post("/<int:portfolio_id>/refresh-prices")
+def refresh_portfolio_prices(portfolio_id):
+    portfolio = _get_portfolio_or_404(portfolio_id)
+    payload = request.get_json(silent=True) or {}
+
+    requested_symbols = _parse_symbol_list(payload)
+    if not requested_symbols:
+        requested_symbols = [
+            holding.security.symbol
+            for holding in portfolio.holdings
+            if holding.security.type not in {"CASH", "BOND"}
+        ]
+
+    override_prices = {}
+    updated_symbols = []
+    errors = {}
+
+    for symbol in requested_symbols:
+        try:
+            quote = fetch_realtime_quote(symbol)
+        except UnknownTickerError as exc:
+            errors[symbol] = str(exc)
+            continue
+
+        security = Security.query.filter_by(symbol=symbol).first()
+        if security is None:
+            security = Security(
+                symbol=symbol,
+                name=quote.get("name"),
+                type="STOCK",
+                exchange=quote.get("exchange"),
+                currency=quote.get("currency") or "USD",
+                sector=quote.get("sector"),
+            )
+            db.session.add(security)
+            db.session.flush()
+        else:
+            security.name = quote.get("name") or security.name
+            security.exchange = quote.get("exchange") or security.exchange
+            security.currency = quote.get("currency") or "USD"
+            security.sector = quote.get("sector") or security.sector
+
+        if security.type not in {"CASH", "BOND"}:
+            price = float(quote["price"])
+            override_prices[symbol] = price
+            updated_symbols.append(symbol)
+            _price_service().cache_quote(
+                symbol,
+                {
+                    "price": price,
+                    "name": quote.get("name"),
+                    "exchange": quote.get("exchange"),
+                    "currency": quote.get("currency") or "USD",
+                    "sector": quote.get("sector"),
+                },
+            )
+            db.session.add(
+                MarketPrice(
+                    security_id=security.id,
+                    price=price,
+                    as_of=datetime.now(timezone.utc),
+                    source="yahoo",
+                )
+            )
+
+    db.session.commit()
+
+    refreshed_portfolio = db.session.get(Portfolio, portfolio_id)
+    return jsonify({
+        "message": "Prices refreshed",
+        "updated_symbols": updated_symbols,
+        "errors": errors,
+        "portfolio": _serialize_portfolio(refreshed_portfolio, override_prices=override_prices),
+        "analytics": _compute_portfolio_metrics(refreshed_portfolio, override_prices=override_prices),
+    })
 
 
 @bp.post("/<int:portfolio_id>/what-if")

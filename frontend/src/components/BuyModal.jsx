@@ -14,6 +14,7 @@ export default function BuyModal({ onSubmit, onClose }) {
 
   useEffect(() => {
     setMarketPrice(null)
+    setPrice('')
     setPriceError('')
   }, [symbol])
 
@@ -21,7 +22,7 @@ export default function BuyModal({ onSubmit, onClose }) {
     const symbolValue = symbol.trim().toUpperCase()
     if (!symbolValue) {
       setPriceError('Enter a ticker symbol first.')
-      return
+      return null
     }
 
     setPriceError('')
@@ -31,8 +32,10 @@ export default function BuyModal({ onSubmit, onClose }) {
       const roundedPrice = Number(result.price.toFixed(2))
       setMarketPrice(roundedPrice)
       setPrice(String(roundedPrice))
+      return roundedPrice
     } catch (err) {
       setPriceError(err.message)
+      return null
     } finally {
       setFetchingPrice(false)
     }
@@ -53,20 +56,28 @@ export default function BuyModal({ onSubmit, onClose }) {
       setError('Quantity must be a positive whole number.')
       return
     }
-    if (trimmedPrice) {
-      const unitPrice = parseFloat(trimmedPrice)
-      if (!(unitPrice > 0)) {
-        setError('Purchase price must be a positive number.')
-        return
-      }
-    }
 
     setSaving(true)
     try {
-      const payload = { symbol: symbol.trim().toUpperCase(), quantity: qty }
+      let unitPrice = null
       if (trimmedPrice) {
-        payload.price = parseFloat(trimmedPrice)
+        unitPrice = parseFloat(trimmedPrice)
+        if (!(unitPrice > 0)) {
+          setError('Purchase price must be a positive number.')
+          setSaving(false)
+          return
+        }
+      } else {
+        unitPrice = marketPrice ?? await fetchLivePrice()
       }
+
+      if (!(unitPrice > 0)) {
+        setError('Unable to retrieve a live price for this security.')
+        setSaving(false)
+        return
+      }
+
+      const payload = { symbol: symbol.trim().toUpperCase(), quantity: qty, price: unitPrice }
       await onSubmit(payload)
     } catch (err) {
       setError(err.message)
@@ -77,7 +88,12 @@ export default function BuyModal({ onSubmit, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-        <h3>Buy Security</h3>
+        <div className="modal-head">
+          <div>
+            <h3>Buy security</h3>
+            <p className="hint">Capture a trade with a live quote so the transaction stays aligned with the current market price.</p>
+          </div>
+        </div>
         <ErrorBanner message={error} />
         <form onSubmit={handleSubmit}>
           <div className="field">
@@ -91,43 +107,43 @@ export default function BuyModal({ onSubmit, onClose }) {
             />
             <div className="hint">If you already hold this symbol, it will merge as a weighted-average cost.</div>
           </div>
-        <div className="field">
-          <label htmlFor="quantity">Quantity</label>
-          <input id="quantity" type="number" min="1" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 10" />
-        </div>
-        <div className="field">
-          <div className="field-row">
-            <div>
-              <label htmlFor="price">Purchase price</label>
-              <input id="price" type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="e.g. 150.00" />
-              <div className="hint">Leave blank to use the latest market quote from Yahoo Finance.</div>
+          <div className="field">
+            <label htmlFor="quantity">Quantity</label>
+            <input id="quantity" type="number" min="1" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="e.g. 10" />
+          </div>
+          <div className="field">
+            <div className="field-row">
+              <div>
+                <label htmlFor="price">Live purchase price</label>
+                <input id="price" type="text" value={price} readOnly placeholder="Fetch a live quote" />
+                <div className="hint">The price is populated from the latest Yahoo Finance quote and can’t be edited manually.</div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={fetchLivePrice}
+                disabled={!symbol.trim() || fetchingPrice}
+              >
+                {fetchingPrice ? 'Loading…' : 'Fetch live quote'}
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn btn-secondary btn-small"
-              onClick={fetchLivePrice}
-              disabled={!symbol.trim() || fetchingPrice}
-            >
-              {fetchingPrice ? 'Loading…' : 'Fetch & use live price'}
+            {marketPrice !== null && (
+              <div className="live-price">
+                Current market price: <strong>${marketPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+              </div>
+            )}
+            {priceError && <div className="error-text">{priceError}</div>}
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? 'Buying…' : 'Buy'}
             </button>
           </div>
-          {marketPrice !== null && (
-            <div className="live-price">
-              Current market price: <strong>${marketPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-            </div>
-          )}
-          {priceError && <div className="error-text">{priceError}</div>}
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? 'Buying…' : 'Buy'}
-          </button>
-        </div>
-      </form>
+        </form>
+      </div>
     </div>
-  </div>
   )
 }

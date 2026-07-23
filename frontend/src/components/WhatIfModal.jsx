@@ -111,8 +111,8 @@ export default function WhatIfModal({ holdings, onSubmit, onClose }) {
       <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <h3>What-If Stock Cart</h3>
-            <p className="hint">Build a stock watchlist and compare historical or manually entered base prices to today’s market levels.</p>
+            <h3>What-if scenario builder</h3>
+            <p className="hint">Model a position change with either a manual price assumption or a historical market date and compare it against your current portfolio view.</p>
           </div>
         </div>
 

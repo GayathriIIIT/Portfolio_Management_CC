@@ -2,7 +2,7 @@ function formatMoney(value) {
   return Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-export default function HoldingsTable({ holdings, onSell, onEdit }) {
+export default function HoldingsTable({ holdings, onSell, onEdit, onRefresh }) {
   if (holdings.length === 0) {
     return <div className="empty-state">No holdings yet. Use "Buy" to add your first security.</div>
   }
@@ -31,7 +31,14 @@ export default function HoldingsTable({ holdings, onSell, onEdit }) {
                 </td>
                 <td className="num">{h.quantity}</td>
                 <td className="num">${formatMoney(h.purchase_price)}</td>
-                <td className="num">${formatMoney(h.current_price)}</td>
+                <td className="num">
+                  <div className="price-cell">
+                    <span>${formatMoney(h.current_price)}</span>
+                    <button type="button" className="icon-button" onClick={() => onRefresh?.([h.symbol])} title={`Refresh ${h.symbol} price`}>
+                      ↻
+                    </button>
+                  </div>
+                </td>
                 <td className="num">${formatMoney(h.market_value)}</td>
                 <td className={`num ${gain ? 'pl-gain' : 'pl-loss'}`}>
                   {gain ? '+' : ''}${formatMoney(h.unrealized_pl)} ({gain ? '+' : ''}

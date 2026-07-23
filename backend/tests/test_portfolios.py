@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
+
 from app.api import portfolios as portfolios_module
 from app.extensions import db
-from app.models import Security, WhatifPrice
+from app.models import MarketPrice, Security, WhatifPrice
 from app.services import market_price_service as mps_module
 
 
@@ -78,6 +80,65 @@ def test_get_portfolio_analytics(client):
     assert body["current_value"] == 1900.0
     assert body["profit_loss"] == 900.0
     assert body["profit_loss_percentage"] == 90.0
+
+
+def test_refresh_portfolio_prices_persists_live_quotes(client):
+    created = _create_portfolio(client).get_json()
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "MSFT", "quantity": 2, "purchase_price": 300.0},
+    )
+
+    resp = client.post(f"/api/portfolios/{created['id']}/refresh-prices")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["updated_symbols"] == ["AAPL", "MSFT"]
+    assert body["portfolio"]["holdings"][0]["current_price"] == 190.0
+    assert body["portfolio"]["holdings"][1]["current_price"] == 420.0
+
+    persisted_prices = MarketPrice.query.order_by(MarketPrice.id).all()
+    assert len(persisted_prices) == 2
+    assert [record.price for record in persisted_prices] == [190.0, 420.0]
+
+
+def test_portfolio_chart_endpoint_returns_points_and_persists_series(client, monkeypatch):
+    created = _create_portfolio(client).get_json()
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    def fake_collect(symbol, security_id, range_key, db_session=None):
+        points = [
+            {"timestamp": "2024-01-01T09:00:00Z", "price": 100.0},
+            {"timestamp": "2024-01-01T09:05:00Z", "price": 101.0},
+        ]
+        for item in points:
+            db_session.add(
+                MarketPrice(
+                    security_id=security_id,
+                    price=item["price"],
+                    as_of=datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")),
+                    source="mock",
+                )
+            )
+        db_session.commit()
+        return points
+
+    monkeypatch.setattr(portfolios_module.market_price_service, "collect_and_store_price_series", fake_collect)
+
+    resp = client.get(f"/api/portfolios/{created['id']}/analytics/chart", query_string={"range": "1d"})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["range"] == "1d"
+    assert body["points"][0]["price"] == 100.0
+    assert len(MarketPrice.query.all()) == 2
 
 
 def test_portfolio_what_if_analysis(client):

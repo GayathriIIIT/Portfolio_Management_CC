@@ -10,15 +10,21 @@ export default function App() {
           <div className="brand-mark">CC</div>
           <div>
             <div className="brand-company">Code Cookers</div>
-            <div className="brand-tag">Portfolio Management Dashboard</div>
+            <div className="brand-tag">Portfolio Intelligence</div>
           </div>
         </div>
 
         <nav className="sidebar-nav">
           <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-            Overview
+            <span>◉</span>
+            <span>Dashboard</span>
           </NavLink>
         </nav>
+
+        <div className="sidebar-card">
+          <div className="sidebar-card-title">Live workflow</div>
+          <p>Track live prices, review holdings, and model scenarios without clutter.</p>
+        </div>
       </aside>
 
       <main className="main-content">
