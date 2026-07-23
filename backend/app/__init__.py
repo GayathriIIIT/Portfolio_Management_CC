@@ -34,7 +34,7 @@ def _start_realtime_price_updater(app):
                             continue
             except Exception:
                 app.logger.exception("Realtime price update failed")
-            stop_event.wait(1)
+            stop_event.wait(app.config.get("MARKET_PRICE_REFRESH_INTERVAL_SECONDS", 60))
 
     thread = threading.Thread(target=worker, daemon=True, name="realtime-price-updater")
     thread.start()

@@ -20,4 +20,7 @@ class WhatifPrice(db.Model):
     scenario_name = db.Column(db.String(128), nullable=False)
     security_id = db.Column(db.BigInteger, db.ForeignKey("security.id"), nullable=False)
     hypothetical_price = db.Column(db.Numeric(18, 4), nullable=False)
+    price_type = db.Column(db.String(16))
+    trade_date = db.Column(db.Date)
+    price_source = db.Column(db.String(16), nullable=False, default="manual")
     created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

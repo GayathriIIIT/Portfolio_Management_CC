@@ -7,7 +7,9 @@ process-local dict, refreshing from Yahoo Finance (via `yfinance`) once a cached
 entry goes stale.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+import contextlib
+import io
 
 import yfinance as yf
 
@@ -32,7 +34,8 @@ def _fetch_price(ticker, symbol):
         pass
 
     try:
-        history = ticker.history(period="5d")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            history = ticker.history(period="5d")
         if not history.empty:
             return float(history["Close"].dropna().iloc[-1])
     except Exception:
@@ -50,7 +53,8 @@ def _fetch_quote(symbol):
     symbols) is normalized to a single `UnknownTickerError` so callers only
     need to handle one failure mode.
     """
-    ticker = yf.Ticker(symbol)
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        ticker = yf.Ticker(symbol)
 
     price = _fetch_price(ticker, symbol)
     if price is None:
@@ -72,6 +76,54 @@ def _fetch_quote(symbol):
         "currency": info.get("currency") or "USD",
         "sector": info.get("sector"),
     }
+
+
+def get_historical_price(symbol, trade_date, price_type="close"):
+    """Fetch an Open, Close, High, or Low price for a symbol on a specific calendar date."""
+    if isinstance(trade_date, datetime):
+        trade_date = trade_date.date()
+    elif isinstance(trade_date, str):
+        trade_date = date.fromisoformat(trade_date)
+
+    if not isinstance(trade_date, date):
+        raise UnknownTickerError("'trade_date' must be a valid date")
+
+    normalized_price_type = (price_type or "close").lower()
+    if normalized_price_type not in {"open", "close", "high", "low"}:
+        raise UnknownTickerError("'price_type' must be 'open', 'close', 'high', or 'low'")
+
+    ticker = yf.Ticker(symbol)
+    start_date = trade_date.strftime("%Y-%m-%d")
+    end_date = (trade_date + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            history = ticker.history(start=start_date, end=end_date, auto_adjust=False)
+    except Exception as exc:
+        raise UnknownTickerError(
+            f"Unable to resolve historical price for symbol '{symbol}' on {trade_date}"
+        ) from exc
+
+    if history.empty:
+        raise UnknownTickerError(
+            f"Unable to resolve historical price for symbol '{symbol}' on {trade_date}"
+        )
+
+    row = history.iloc[0]
+    if normalized_price_type == "open":
+        price = row.get("Open")
+    elif normalized_price_type == "close":
+        price = row.get("Close")
+    elif normalized_price_type == "high":
+        price = row.get("High")
+    else:
+        price = row.get("Low")
+
+    if price is None:
+        raise UnknownTickerError(
+            f"Unable to resolve historical price for symbol '{symbol}' on {trade_date}"
+        )
+    return float(price)
 
 
 class MarketPriceService:
@@ -98,6 +150,9 @@ class MarketPriceService:
 
     def get_current_price(self, symbol):
         return self._get_or_refresh(symbol)["price"]
+
+    def get_historical_price(self, symbol, trade_date, price_type="close"):
+        return get_historical_price(symbol, trade_date, price_type=price_type)
 
     def get_security_info(self, symbol):
         entry = self._get_or_refresh(symbol)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getPortfolio, getPortfolioAnalytics, getPortfolioTransactions, portfolioWhatIf, deletePortfolio, updatePortfolio } from '../api/portfolios'
+import { getPortfolio, getPortfolioAnalytics, getPortfolioTransactions, portfolioWhatIf, getPortfolioWhatIfEntries, deletePortfolioWhatIfEntry, deletePortfolio, updatePortfolio } from '../api/portfolios'
 import { buyHolding, sellHolding, updateHolding } from '../api/holdings'
 import HoldingsTable from './HoldingsTable'
 import BuyModal from './BuyModal'
@@ -20,6 +20,7 @@ export default function PortfolioDetailPage() {
   const [analytics, setAnalytics] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [whatIfResult, setWhatIfResult] = useState(null)
+  const [whatIfEntries, setWhatIfEntries] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -35,14 +36,16 @@ export default function PortfolioDetailPage() {
     setLoading(true)
     setError('')
     try {
-      const [data, analyticsData, transactionsData] = await Promise.all([
+      const [data, analyticsData, transactionsData, whatIfData] = await Promise.all([
         getPortfolio(id),
         getPortfolioAnalytics(id),
         getPortfolioTransactions(id),
+        getPortfolioWhatIfEntries(id),
       ])
       setPortfolio(data)
       setAnalytics(analyticsData)
       setTransactions(transactionsData)
+      setWhatIfEntries(whatIfData)
       setWhatIfResult(null)
     } catch (err) {
       setError(err.message)
@@ -83,6 +86,23 @@ export default function PortfolioDetailPage() {
     const result = await portfolioWhatIf(id, payload)
     setWhatIfResult(result)
     setShowWhatIf(false)
+
+    try {
+      const entries = await getPortfolioWhatIfEntries(id)
+      setWhatIfEntries(entries)
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  async function handleDeleteWhatIfEntry(entryId) {
+    setError('')
+    try {
+      await deletePortfolioWhatIfEntry(id, entryId)
+      setWhatIfEntries((prev) => prev.filter((entry) => entry.id !== entryId))
+    } catch (err) {
+      setError(err.message)
+    }
   }
 
   async function handleEditPortfolio(payload) {
@@ -206,25 +226,95 @@ export default function PortfolioDetailPage() {
 
       {whatIfResult && (
         <div className="card whatif-result-card">
-          <div className="whatif-result-title">What-If Scenario</div>
-          <div className="whatif-result-grid">
+          <div className="whatif-result-header">
             <div>
-              <div className="label">Scenario</div>
-              <strong>{whatIfResult.scenario_name || 'Projected change'}</strong>
+              <div className="whatif-result-title">What-If Scenario</div>
+              <div className="whatif-result-name">{whatIfResult.scenario_name || 'Projected change'}</div>
             </div>
-            <div>
-              <div className="label">Projected value</div>
-              <strong>${whatIfResult.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-            </div>
-            <div>
-              <div className="label">Projected P/L</div>
-              <strong className={whatIfResult.profit_loss >= 0 ? 'pl-gain' : 'pl-loss'}>
-                ${whatIfResult.profit_loss.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </strong>
+            <div className="whatif-result-summary">
+              <div>
+                <div className="label">Projected value</div>
+                <strong>${whatIfResult.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+              </div>
+              <div>
+                <div className="label">Projected P/L</div>
+                <strong className={whatIfResult.profit_loss >= 0 ? 'pl-gain' : 'pl-loss'}>
+                  ${whatIfResult.profit_loss.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+              </div>
+              <div>
+                <div className="label">Return</div>
+                <strong>{whatIfResult.profit_loss_percentage?.toFixed(2)}%</strong>
+              </div>
             </div>
           </div>
+
+          {whatIfResult.holdings?.length > 0 && (
+            <div className="whatif-table">
+              <div className="whatif-table-head">
+                <div>Symbol</div>
+                <div>Qty</div>
+                <div>Base price</div>
+                <div>Current price</div>
+                <div>P/L</div>
+                <div>Return</div>
+              </div>
+              {whatIfResult.holdings.map((holding) => (
+                <div key={holding.symbol} className="whatif-table-row">
+                  <div>{holding.symbol}</div>
+                  <div>{holding.quantity}</div>
+                  <div>${holding.hypothetical_price.toFixed(2)}</div>
+                  <div>${holding.current_price.toFixed(2)}</div>
+                  <div className={holding.profit_loss >= 0 ? 'pl-gain' : 'pl-loss'}>${holding.profit_loss.toFixed(2)}</div>
+                  <div>{holding.profit_loss_percentage.toFixed(2)}%</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
+
+      <div className="card whatif-history-card">
+        <div className="whatif-result-header">
+          <div>
+            <div className="whatif-result-title">Saved what-if entries</div>
+            <div className="hint">Stored what-if scenario rows from the database.</div>
+          </div>
+        </div>
+
+        {whatIfEntries.length === 0 ? (
+          <div className="empty-state">No saved what-if entries yet.</div>
+        ) : (
+          <div className="whatif-table">
+            <div className="whatif-table-head">
+              <div>Scenario</div>
+              <div>Symbol</div>
+              <div>Price</div>
+              <div>Price type</div>
+              <div>Date</div>
+              <div></div>
+            </div>
+            {whatIfEntries.map((entry) => (
+              <div key={entry.id} className="whatif-table-row">
+                <div>{entry.scenario_name}</div>
+                <div>{entry.symbol}</div>
+                <div>${entry.hypothetical_price.toFixed(2)}</div>
+                <div>{entry.price_source === 'historical' ? `${entry.price_type || 'close'}` : 'manual'}</div>
+                <div>{entry.trade_date || '-'}</div>
+                <div>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-small"
+                    onClick={() => handleDeleteWhatIfEntry(entry.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="card detail-header">
         <div>

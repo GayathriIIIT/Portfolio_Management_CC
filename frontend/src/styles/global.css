@@ -427,21 +427,46 @@ table.holdings-table tbody tr:hover {
   position: fixed;
   inset: 0;
   background: rgba(29, 9, 61, 0.52);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: var(--space-4);
   z-index: 50;
   animation: fadeIn 0.2s ease;
+  overflow-y: auto;
 }
 
 .modal-panel {
-  width: min(560px, 100%);
+  width: min(760px, 100%);
+  max-height: calc(100vh - 64px);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 240, 255, 0.98));
   border-radius: var(--radius-lg);
   border: 1px solid rgba(146, 117, 214, 0.18);
   padding: var(--space-6);
   box-shadow: var(--shadow-lg);
   animation: floatIn 0.28s ease;
+  overflow: hidden;
+}
+
+.modal-panel form {
+  display: grid;
+  gap: var(--space-4);
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.modal-panel form::-webkit-scrollbar {
+  width: 10px;
+}
+
+.modal-panel form::-webkit-scrollbar-thumb {
+  background: rgba(146, 117, 214, 0.3);
+  border-radius: 999px;
+}
+
+.modal-panel form::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .modal-panel-extended {
@@ -624,6 +649,145 @@ table.holdings-table tbody tr:hover {
 
 .radio-row input {
   accent-color: var(--lavender-600);
+}
+
+.field {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: var(--space-4);
+}
+
+.field-row {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.field-grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.modal-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.modal-head h3 {
+  margin: 0;
+  color: var(--lavender-900);
+  font-size: 1.4rem;
+}
+
+.modal-head .hint {
+  margin: 0;
+}
+
+.whatif-rows {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.whatif-row-input {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: rgba(242, 236, 255, 0.95);
+  border: 1px solid rgba(146, 117, 214, 0.16);
+}
+
+.whatif-row-left {
+  display: grid;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 240px;
+}
+
+.remove-row {
+  color: var(--lavender-700);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(146, 117, 214, 0.16);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0.8rem 1rem;
+  align-self: flex-start;
+}
+
+.remove-row:hover {
+  text-decoration: none;
+  background: rgba(236, 224, 255, 0.98);
+}
+
+.remove-row {
+  color: var(--lavender-700);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0.9rem 1.2rem;
+}
+
+.remove-row:hover {
+  text-decoration: underline;
+}
+
+.whatif-result-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: flex-start;
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.whatif-result-name {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 0.4rem;
+  color: var(--lavender-900);
+}
+
+.whatif-result-summary {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.whatif-table {
+  margin-top: var(--space-4);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid rgba(146, 117, 214, 0.12);
+}
+
+.whatif-table-head,
+.whatif-table-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  align-items: center;
+}
+
+.whatif-table-head {
+  background: rgba(146, 117, 214, 0.08);
+  text-transform: uppercase;
+  color: var(--lavender-500);
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+}
+
+.whatif-table-row {
+  border-top: 1px solid rgba(146, 117, 214, 0.08);
+  background: #fff;
 }
 
 .modal-actions {

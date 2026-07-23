@@ -63,3 +63,17 @@ def test_unknown_ticker_raises(monkeypatch):
 
     with pytest.raises(UnknownTickerError):
         service.get_current_price("NOPE")
+
+
+def test_get_historical_price_uses_history_lookup(monkeypatch):
+    service = MarketPriceService(ttl_seconds=60)
+
+    def fake_historical_price(symbol, trade_date, price_type="close"):
+        assert symbol == "AAPL"
+        assert trade_date == "2024-01-10"
+        assert price_type == "close"
+        return 123.45
+
+    monkeypatch.setattr(mps_module, "get_historical_price", fake_historical_price)
+
+    assert service.get_historical_price("AAPL", "2024-01-10", price_type="close") == 123.45

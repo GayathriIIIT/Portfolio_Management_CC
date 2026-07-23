@@ -123,6 +123,9 @@ CREATE TABLE whatif_price (
     scenario_name       VARCHAR(128)  NOT NULL,                 -- e.g. "Tech crash", "Rate cut"
     security_id         BIGINT        NOT NULL,                 -- which instrument the assumption applies to
     hypothetical_price  NUMERIC(18,4) NOT NULL,                 -- assumed price for this scenario
+    price_type          VARCHAR(16),                            -- open | close (historical scenarios)
+    trade_date          DATE,                                   -- used for historical what-if runs
+    price_source        VARCHAR(16)   NOT NULL DEFAULT 'manual', -- manual | historical
     created_at          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_wp_portfolio
         FOREIGN KEY (portfolio_id) REFERENCES portfolio(id) ON DELETE CASCADE,

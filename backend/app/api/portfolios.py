@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 
 from app.api.errors import ApiError, NotFoundError
 from app.extensions import db
 from app.models import Portfolio, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
+from app.services import market_price_service
 from app.services.market_price_service import (
     UnknownTickerError,
     fetch_realtime_quote,
@@ -162,8 +163,17 @@ def _get_or_create_security(symbol):
 
     try:
         info = _price_service().get_security_info(symbol)
-    except UnknownTickerError as exc:
-        raise ApiError(str(exc), status_code=400) from exc
+    except UnknownTickerError:
+        try:
+            quote = fetch_realtime_quote(symbol)
+        except UnknownTickerError as exc:
+            raise ApiError(str(exc), status_code=400) from exc
+        info = {
+            "name": quote.get("name"),
+            "exchange": quote.get("exchange"),
+            "currency": quote.get("currency") or "USD",
+            "sector": quote.get("sector"),
+        }
 
     security = Security(
         symbol=symbol,
@@ -176,6 +186,127 @@ def _get_or_create_security(symbol):
     db.session.add(security)
     db.session.flush()
     return security
+
+
+def _get_live_price(symbol):
+    try:
+        quote = fetch_realtime_quote(symbol)
+    except UnknownTickerError as exc:
+        raise ApiError(str(exc), status_code=400) from exc
+    return float(quote["price"])
+
+
+def _coerce_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ApiError("'date' must be an ISO date string in YYYY-MM-DD format") from exc
+    raise ApiError("'date' must be a valid date")
+
+
+def _normalize_price_type(value):
+    if value is None:
+        return "close"
+    if not isinstance(value, str):
+        raise ApiError("'price_type' must be 'open', 'close', 'high', or 'low'")
+    normalized = value.strip().lower()
+    if normalized not in {"open", "close", "high", "low"}:
+        raise ApiError("'price_type' must be 'open', 'close', 'high', or 'low'")
+    return normalized
+
+
+def _parse_symbol_list(payload):
+    symbols = []
+    symbol_value = payload.get("symbol")
+    if isinstance(symbol_value, str) and symbol_value.strip():
+        symbols = [symbol_value.strip().upper()]
+    elif symbol_value is not None:
+        raise ApiError("'symbol' must be a non-empty string")
+
+    if "symbols" in payload:
+        if symbols:
+            raise ApiError("Provide either 'symbol' or 'symbols', not both")
+        symbol_values = payload.get("symbols")
+        if not isinstance(symbol_values, list):
+            raise ApiError("'symbols' must be an array of ticker strings")
+        for symbol in symbol_values:
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ApiError("All symbols in 'symbols' must be non-empty strings")
+            symbols.append(symbol.strip().upper())
+
+    return symbols
+
+
+def _parse_quantities(payload, symbols):
+    quantities = {}
+    if "quantities" in payload:
+        quantity_map = payload.get("quantities")
+        if not isinstance(quantity_map, dict):
+            raise ApiError("'quantities' must be an object of symbol to quantity values")
+        for symbol, value in quantity_map.items():
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ApiError("All quantities keys must be non-empty symbol strings")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                raise ApiError(f"Quantity for '{symbol}' must be a positive number")
+            quantities[symbol.upper().strip()] = float(value)
+    elif "quantity" in payload:
+        quantity_value = payload.get("quantity")
+        if isinstance(quantity_value, bool) or not isinstance(quantity_value, (int, float)) or quantity_value <= 0:
+            raise ApiError("'quantity' must be a positive number")
+        for symbol in symbols:
+            quantities[symbol] = float(quantity_value)
+    return quantities
+
+
+def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None):
+    quantities = quantities or {}
+    invested_value = 0.0
+    current_value = 0.0
+    holdings = []
+
+    for symbol in symbols:
+        quantity = float(quantities.get(symbol, 1.0))
+        if symbol not in override_prices:
+            raise ApiError(f"Missing hypothetical price for symbol '{symbol}'")
+
+        hypothetical_price = float(override_prices[symbol])
+        try:
+            current_price = float(_price_service().get_current_price(symbol))
+        except UnknownTickerError as exc:
+            raise ApiError(str(exc), status_code=400) from exc
+        market_value = current_price * quantity
+        cost_basis = hypothetical_price * quantity
+        profit_loss = market_value - cost_basis
+        profit_loss_percentage = (profit_loss / cost_basis * 100) if cost_basis else 0.0
+
+        invested_value += cost_basis
+        current_value += market_value
+        holdings.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "hypothetical_price": hypothetical_price,
+                "current_price": current_price,
+                "market_value": market_value,
+                "cost_basis": cost_basis,
+                "profit_loss": profit_loss,
+                "profit_loss_percentage": profit_loss_percentage,
+            }
+        )
+
+    return {
+        "portfolio_id": None,
+        "invested_value": invested_value,
+        "current_value": current_value,
+        "profit_loss": current_value - invested_value,
+        "profit_loss_percentage": (current_value - invested_value) / invested_value * 100 if invested_value else 0.0,
+        "holdings": holdings,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -261,19 +392,66 @@ def get_portfolio_analytics(portfolio_id):
 def portfolio_what_if(portfolio_id):
     portfolio = _get_portfolio_or_404(portfolio_id)
     payload = request.get_json(silent=True) or {}
-    scenario_name = payload.get("scenario_name") or payload.get("name") or "default"
-    price_map = payload.get("prices", {})
-
-    if not isinstance(price_map, dict):
-        raise ApiError("'prices' must be an object of symbol to price values")
+    scenario_name = _require_string(payload, "scenario_name", required=False) or _require_string(
+        payload, "name", required=False
+    ) or "default"
 
     override_prices = {}
-    for symbol, value in price_map.items():
-        if not isinstance(symbol, str) or not symbol.strip():
-            raise ApiError("All price keys must be non-empty symbol strings")
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ApiError(f"Price for '{symbol}' must be a positive number")
-        override_prices[symbol.upper().strip()] = float(value)
+    price_mode = "manual"
+    trade_date = None
+    price_type = "close"
+    custom_symbols = _parse_symbol_list(payload)
+    quantities = _parse_quantities(payload, custom_symbols)
+
+    if "prices" in payload:
+        price_map = payload.get("prices", {})
+        if not isinstance(price_map, dict):
+            raise ApiError("'prices' must be an object of symbol to price values")
+        for symbol, value in price_map.items():
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise ApiError("All price keys must be non-empty symbol strings")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+                raise ApiError(f"Price for '{symbol}' must be a positive number")
+            override_prices[symbol.upper().strip()] = float(value)
+
+    if "price" in payload:
+        price_value = payload.get("price")
+        if isinstance(price_value, bool) or not isinstance(price_value, (int, float)) or price_value <= 0:
+            raise ApiError("'price' must be a positive number")
+        if custom_symbols:
+            for symbol in custom_symbols:
+                override_prices[symbol] = float(price_value)
+        else:
+            override_prices = {holding.security.symbol: float(price_value) for holding in portfolio.holdings}
+        price_mode = "manual"
+    elif "date" in payload:
+        trade_date = _coerce_date(payload.get("date"))
+        price_type = _normalize_price_type(payload.get("price_type"))
+        price_mode = "historical"
+        if custom_symbols:
+            for symbol in custom_symbols:
+                try:
+                    override_prices[symbol] = market_price_service.get_historical_price(
+                        symbol, trade_date, price_type=price_type
+                    )
+                except UnknownTickerError as exc:
+                    raise ApiError(str(exc), status_code=400) from exc
+        else:
+            for holding in portfolio.holdings:
+                symbol = holding.security.symbol
+                if holding.security.type in {"CASH", "BOND"}:
+                    override_prices[symbol] = float(holding.avg_cost)
+                    continue
+                try:
+                    override_prices[symbol] = market_price_service.get_historical_price(
+                        symbol, trade_date, price_type=price_type
+                    )
+                except UnknownTickerError as exc:
+                    raise ApiError(str(exc), status_code=400) from exc
+    elif custom_symbols and not override_prices:
+        raise ApiError("Provide either 'price' or 'date' when requesting a symbol-based what-if")
+    elif not custom_symbols and not override_prices:
+        raise ApiError("Provide either 'prices', 'price', or 'date' in the request payload")
 
     for symbol, value in override_prices.items():
         security = _get_or_create_security(symbol)
@@ -289,14 +467,66 @@ def portfolio_what_if(portfolio_id):
                     scenario_name=scenario_name,
                     security_id=security.id,
                     hypothetical_price=value,
+                    price_type=price_type if price_mode == "historical" else None,
+                    trade_date=trade_date,
+                    price_source=price_mode,
                 )
             )
         else:
             existing_row.hypothetical_price = value
+            existing_row.price_type = price_type if price_mode == "historical" else None
+            existing_row.trade_date = trade_date
+            existing_row.price_source = price_mode
 
     db.session.commit()
 
-    return jsonify(_compute_portfolio_metrics(portfolio, override_prices=override_prices))
+    if custom_symbols:
+        result = _compute_symbol_cart_metrics(custom_symbols, override_prices, quantities=quantities)
+    else:
+        result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
+
+    result["scenario_name"] = scenario_name
+    return jsonify(result)
+
+
+@bp.get("/<int:portfolio_id>/what-if")
+def list_portfolio_what_if(portfolio_id):
+    _get_portfolio_or_404(portfolio_id)
+    rows = (
+        WhatifPrice.query.filter_by(portfolio_id=portfolio_id)
+        .order_by(WhatifPrice.created_at.desc(), WhatifPrice.scenario_name, WhatifPrice.security_id)
+        .all()
+    )
+
+    entries = []
+    for row in rows:
+        security = db.session.get(Security, row.security_id)
+        entries.append(
+            {
+                "id": row.id,
+                "scenario_name": row.scenario_name,
+                "symbol": security.symbol if security else None,
+                "hypothetical_price": float(row.hypothetical_price),
+                "price_source": row.price_source,
+                "price_type": row.price_type,
+                "trade_date": row.trade_date.isoformat() if row.trade_date else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
+
+    return jsonify(entries)
+
+
+@bp.delete("/<int:portfolio_id>/what-if/<int:whatif_id>")
+def delete_portfolio_what_if_entry(portfolio_id, whatif_id):
+    _get_portfolio_or_404(portfolio_id)
+    row = WhatifPrice.query.filter_by(id=whatif_id, portfolio_id=portfolio_id).first()
+    if row is None:
+        raise ApiError("What-if entry not found", status_code=404)
+
+    db.session.delete(row)
+    db.session.commit()
+    return "", 204
 
 
 @bp.put("/<int:portfolio_id>")
