@@ -84,7 +84,7 @@ def test_get_historical_price_uses_history_lookup(monkeypatch):
     assert service.get_historical_price("AAPL", "2024-01-10", price_type="close") == 123.45
 
 
-def test_collect_and_store_price_series_persists_four_intraday_samples(monkeypatch):
+def test_collect_and_store_price_series_returns_live_chart_points(monkeypatch):
     class FakeTicker:
         def __init__(self, symbol):
             self.symbol = symbol
@@ -113,6 +113,6 @@ def test_collect_and_store_price_series_persists_four_intraday_samples(monkeypat
         points = mps_module.collect_and_store_price_series("AAPL", 42, range_key="1d", db_session=db.session)
         persisted_rows = MarketPrice.query.filter_by(security_id=42).all()
 
-    assert len(points) == 4
-    assert len(persisted_rows) == 4
-    assert [item["price"] for item in points] == [100.0, 102.0, 104.0, 106.0]
+    assert len(points) == 7
+    assert len(persisted_rows) == 0
+    assert [item["price"] for item in points] == [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0]

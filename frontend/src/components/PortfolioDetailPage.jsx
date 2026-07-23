@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getPortfolio, getPortfolioAnalytics, getPortfolioChartData, getPortfolioTransactions, portfolioWhatIf, getPortfolioWhatIfEntries, deletePortfolioWhatIfEntry, deletePortfolio, updatePortfolio, refreshPortfolioPrices } from '../api/portfolios'
 import { buyHolding, sellHolding, updateHolding } from '../api/holdings'
@@ -12,7 +12,24 @@ import ConfirmDialog from './ConfirmDialog'
 import ErrorBanner from './ErrorBanner'
 import Spinner from './Spinner'
 
-function PortfolioChart({ series, loading, range }) {
+function PortfolioChart({ series, loading, range, portfolio }) {
+  const [hoveredPoint, setHoveredPoint] = useState(null)
+  const svgRef = useRef(null)
+
+  const chartRangeSubtitles = {
+    '1d': '5-minute interval',
+    '7d': '30-minute interval',
+    '1m': 'Hourly interval',
+    '3m': 'Daily trend',
+    '6m': 'Daily trend',
+    '1y': 'Daily trend',
+  }
+
+  const getCurrencySymbol = (currency) => {
+    const symbols = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', CHF: '₣', CAD: 'C$', AUD: 'A$', INR: '₹' }
+    return symbols[currency] || currency
+  }
+
   if (loading) {
     return <div className="empty-state">Loading chart data…</div>
   }
@@ -21,10 +38,13 @@ function PortfolioChart({ series, loading, range }) {
     return <div className="empty-state">Chart data will appear here once price history is available.</div>
   }
 
-  const width = 560
-  const height = 240
-  const padding = 24
-  const colors = ['#7e53c0', '#3a7f65', '#b8506b', '#2e7dd1']
+  const width = 600
+  const height = 320
+  const leftPadding = 60
+  const rightPadding = 20
+  const topPadding = 30
+  const bottomPadding = 40
+  const colors = ['#7e53c0', '#3a7f65', '#b8506b', '#2e7dd1', '#d97706', '#06b6d4']
 
   return (
     <div className="chart-stack">
@@ -32,14 +52,24 @@ function PortfolioChart({ series, loading, range }) {
         const points = entry.points || []
         if (points.length === 0) return null
 
+        const holding = portfolio?.holdings?.find(h => h.symbol === entry.symbol)
+        const currency = holding?.currency || 'USD'
+        const exchange = holding?.exchange || 'N/A'
+
         const values = points.map((point) => Number(point.price)).filter((value) => Number.isFinite(value))
         const minValue = Math.min(...values)
         const maxValue = Math.max(...values)
         const span = maxValue - minValue || 1
+        const paddedMin = minValue - span * 0.15
+        const paddedMax = maxValue + span * 0.15
+        const paddedSpan = paddedMax - paddedMin
+
+        const chartWidth = width - leftPadding - rightPadding
+        const chartHeight = height - topPadding - bottomPadding
 
         const linePoints = points.map((point, pointIndex) => {
-          const x = padding + (pointIndex / Math.max(points.length - 1, 1)) * (width - padding * 2)
-          const y = height - padding - ((Number(point.price) - minValue) / span) * (height - padding * 2)
+          const x = leftPadding + (pointIndex / Math.max(points.length - 1, 1)) * chartWidth
+          const y = topPadding + chartHeight - ((Number(point.price) - paddedMin) / paddedSpan) * chartHeight
           return `${x},${y}`
         }).join(' ')
 
@@ -47,22 +77,108 @@ function PortfolioChart({ series, loading, range }) {
         const firstValue = points[0]?.price
         const delta = latestValue != null && firstValue != null ? latestValue - firstValue : 0
 
+        const handleMouseMove = (e) => {
+          if (!svgRef.current) return
+          const svg = svgRef.current
+          const rect = svg.getBoundingClientRect()
+          const x = e.clientX - rect.left
+          const relativeX = (x - leftPadding) / chartWidth
+          const pointIndex = Math.round(relativeX * (points.length - 1))
+          if (pointIndex >= 0 && pointIndex < points.length) {
+            setHoveredPoint({ ...points[pointIndex], index: pointIndex, symbol: entry.symbol, exchange, currency })
+          }
+        }
+
+        const handleMouseLeave = () => {
+          setHoveredPoint(null)
+        }
+
+        const yAxisLabels = []
+        for (let i = 0; i <= 4; i++) {
+          const value = paddedMin + (i / 4) * paddedSpan
+          yAxisLabels.push(value)
+        }
+
         return (
-          <div key={entry.symbol} className="card chart-card">
-            <div className="chart-card-head">
-              <div>
-                <div className="insight-title">{entry.symbol}</div>
-                <div className="chart-card-subtitle">{range === '1d' ? '5-minute interval' : range === '7d' ? 'Daily trend' : 'Monthly trend'}</div>
+          <div key={entry.symbol} className="card chart-card-pro">
+            <div className="chart-card-head-pro">
+              <div className="chart-title-section">
+                <div className="chart-title">{entry.symbol}</div>
+                <div className="chart-meta">
+                  <span className="exchange-badge">{exchange}</span>
+                  <span className="currency-badge">{currency}</span>
+                </div>
+                <div className="chart-subtitle">{chartRangeSubtitles[range] || 'Price history'}</div>
               </div>
-              <div className={`chart-delta ${delta >= 0 ? 'pl-gain' : 'pl-loss'}`}>
-                {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+              <div className={`chart-delta-pro ${delta >= 0 ? 'pl-gain' : 'pl-loss'}`}>
+                <div className="delta-value">{delta >= 0 ? '+' : ''}{getCurrencySymbol(currency)}{Math.abs(delta).toFixed(2)}</div>
+                <div className="delta-pct">
+                  {delta >= 0 ? '+' : ''}{((delta / firstValue) * 100).toFixed(2)}%
+                </div>
               </div>
             </div>
-            <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg" role="img" aria-label={`${entry.symbol} price chart`}>
-              <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="chart-axis" />
-              <line x1={padding} y1={padding} x2={padding} y2={height - padding} className="chart-axis" />
-              <polyline points={linePoints} fill="none" stroke={colors[index % colors.length]} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            
+            <div className="chart-container-pro" ref={svgRef} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
+              <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg-pro" role="img" aria-label={`${entry.symbol} price chart`}>
+                {/* Grid lines */}
+                {yAxisLabels.map((_, i) => {
+                  const y = topPadding + (i / 4) * chartHeight
+                  return <line key={`grid-${i}`} x1={leftPadding} y1={y} x2={width - rightPadding} y2={y} className="chart-grid-line" />
+                })}
+                
+                {/* Axes */}
+                <line x1={leftPadding} y1={topPadding} x2={leftPadding} y2={topPadding + chartHeight} className="chart-axis-pro" />
+                <line x1={leftPadding} y1={topPadding + chartHeight} x2={width - rightPadding} y2={topPadding + chartHeight} className="chart-axis-pro" />
+                
+                {/* Y-axis labels */}
+                {yAxisLabels.map((value, i) => {
+                  const y = topPadding + (i / 4) * chartHeight
+                  return (
+                    <g key={`y-label-${i}`}>
+                      <line x1={leftPadding - 5} y1={y} x2={leftPadding} y2={y} className="chart-tick" />
+                      <text x={leftPadding - 10} y={y + 4} className="chart-axis-label" textAnchor="end">
+                        {getCurrencySymbol(currency)}{value.toFixed(0)}
+                      </text>
+                    </g>
+                  )
+                })}
+                
+                {/* Chart line */}
+                <polyline points={linePoints} fill="none" stroke={colors[index % colors.length]} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="chart-line-pro" />
+                
+                {/* Hover indicator */}
+                {hoveredPoint && hoveredPoint.symbol === entry.symbol && (
+                  <>
+                    <circle cx={leftPadding + (hoveredPoint.index / Math.max(points.length - 1, 1)) * chartWidth} cy={topPadding + chartHeight - ((Number(hoveredPoint.price) - paddedMin) / paddedSpan) * chartHeight} r="5" className="hover-dot" />
+                  </>
+                )}
+              </svg>
+              
+              {/* Hover tooltip */}
+              {hoveredPoint && hoveredPoint.symbol === entry.symbol && (
+                <div className="chart-tooltip">
+                  <div className="tooltip-content">
+                    <div className="tooltip-row">
+                      <span className="tooltip-label">Price:</span>
+                      <span className="tooltip-value">{getCurrencySymbol(currency)}{Number(hoveredPoint.price).toFixed(2)}</span>
+                    </div>
+                    <div className="tooltip-row">
+                      <span className="tooltip-label">Time:</span>
+                      <span className="tooltip-value">{new Date(hoveredPoint.timestamp).toLocaleString()}</span>
+                    </div>
+                    <div className="tooltip-row">
+                      <span className="tooltip-label">Symbol:</span>
+                      <span className="tooltip-value font-bold">{entry.symbol}</span>
+                    </div>
+                    <div className="tooltip-row">
+                      <span className="tooltip-label">Exchange:</span>
+                      <span className="tooltip-value">{exchange}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="chart-footer-pro">Price shown in {getCurrencySymbol(currency)}{currency}</div>
           </div>
         )
       })}
@@ -86,6 +202,22 @@ export default function PortfolioDetailPage() {
   const [chartSeries, setChartSeries] = useState([])
   const [chartLoading, setChartLoading] = useState(false)
   const [chartRange, setChartRange] = useState('1d')
+  const chartRanges = [
+    { key: '1d', label: '1D' },
+    { key: '7d', label: '1W' },
+    { key: '1m', label: '1M' },
+    { key: '3m', label: '3M' },
+    { key: '6m', label: '6M' },
+    { key: '1y', label: '1Y' },
+  ]
+  const chartRangeSubtitles = {
+    '1d': '5-minute interval',
+    '7d': '30-minute interval',
+    '1m': 'Hourly interval',
+    '3m': 'Daily trend',
+    '6m': 'Daily trend',
+    '1y': 'Daily trend',
+  }
   const [menuOpen, setMenuOpen] = useState(false)
   const [lastRefreshAt, setLastRefreshAt] = useState(null)
 
@@ -413,19 +545,19 @@ export default function PortfolioDetailPage() {
                 <div className="chart-toolbar">
                   <div className="insight-title">Price history</div>
                   <div className="chart-toggle-group">
-                    {['1d', '7d', '1m'].map((rangeOption) => (
+                    {chartRanges.map((rangeOption) => (
                       <button
-                        key={rangeOption}
+                        key={rangeOption.key}
                         type="button"
-                        className={`btn btn-secondary btn-small ${chartRange === rangeOption ? 'active' : ''}`}
-                        onClick={() => loadChartData(rangeOption)}
+                        className={`btn btn-secondary btn-small ${chartRange === rangeOption.key ? 'active' : ''}`}
+                        onClick={() => loadChartData(rangeOption.key)}
                       >
-                        {rangeOption === '1d' ? '1 day' : rangeOption === '7d' ? '1 week' : '1 month'}
+                        {rangeOption.label}
                       </button>
                     ))}
                   </div>
                 </div>
-                <PortfolioChart series={chartSeries} loading={chartLoading} range={chartRange} />
+                <PortfolioChart series={chartSeries} loading={chartLoading} range={chartRange} portfolio={portfolio} />
               </div>
             </div>
           )}

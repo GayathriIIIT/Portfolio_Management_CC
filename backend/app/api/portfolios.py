@@ -4,7 +4,7 @@ from flask import Blueprint, current_app, jsonify, request
 
 from app.api.errors import ApiError, NotFoundError
 from app.extensions import db
-from app.models import MarketPrice, Portfolio, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
+from app.models import Portfolio, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
 from app.services import market_price_service
 from app.services.market_price_service import (
     UnknownTickerError,
@@ -58,6 +58,9 @@ def _serialize_holding(holding, override_prices=None):
     return {
         "id": holding.id,
         "symbol": symbol,
+        "name": holding.security.name,
+        "exchange": holding.security.exchange,
+        "currency": holding.security.currency or "USD",
         "quantity": quantity,
         "purchase_price": purchase_price,
         "current_price": current_price,
@@ -395,8 +398,8 @@ def get_portfolio_chart_data(portfolio_id):
     range_key = request.args.get("range", "1d")
     if isinstance(range_key, str):
         range_key = range_key.strip().lower()
-    if range_key not in {"1d", "7d", "1m"}:
-        raise ApiError("'range' must be one of '1d', '7d', or '1m'", status_code=400)
+    if range_key not in {"1d", "7d", "1m", "3m", "6m", "1y"}:
+        raise ApiError("'range' must be one of '1d', '7d', '1m', '3m', '6m', or '1y'", status_code=400)
 
     series = []
     for holding in portfolio.holdings:
@@ -475,14 +478,6 @@ def refresh_portfolio_prices(portfolio_id):
                     "currency": quote.get("currency") or "USD",
                     "sector": quote.get("sector"),
                 },
-            )
-            db.session.add(
-                MarketPrice(
-                    security_id=security.id,
-                    price=price,
-                    as_of=datetime.now(timezone.utc),
-                    source="yahoo",
-                )
             )
 
     db.session.commit()

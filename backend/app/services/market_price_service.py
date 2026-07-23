@@ -22,23 +22,22 @@ class UnknownTickerError(ValueError):
 
 
 def _fetch_price(ticker, symbol):
-    """Best-effort current price lookup. `fast_info` is preferred (cheap) but its
-    lazy properties can raise on flaky/empty Yahoo responses (rate limiting,
-    delisted symbols, transient API errors) instead of just returning None, so
-    every access is guarded. Falls back to recent daily history if needed."""
+    """Best-effort current price lookup.
+
+    Uses ticker.info first for live market data, then falls back to recent daily
+    history from yfinance if that information is unavailable."""
     try:
-        fast_info = ticker.fast_info
-        price = fast_info.get("lastPrice") if hasattr(fast_info, "get") else None
-        if price is None:
-            price = getattr(fast_info, "last_price", None)
-        if price is not None:
-            return float(price)
+        info = ticker.info or {}
+        for key in ("currentPrice", "regularMarketPrice", "lastPrice", "previousClose"):
+            price = info.get(key)
+            if price is not None:
+                return float(price)
     except Exception:
         pass
 
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            history = ticker.history(period="5d")
+            history = ticker.history(period="1d")
         if not history.empty:
             return float(history["Close"].dropna().iloc[-1])
     except Exception:
@@ -192,12 +191,25 @@ def _get_series_from_db(security_id, range_key, db_session=None):
     ]
 
 
-def _sample_intraday_points(history, target_count=4):
-    if history.empty:
-        return []
+def _chart_period_interval(range_key):
+    normalized_range = (range_key or "1d").lower()
+    if normalized_range == "1d":
+        return "1d", "5m"
+    if normalized_range == "7d":
+        return "5d", "30m"
+    if normalized_range == "1m":
+        return "1mo", "1h"
+    if normalized_range == "3m":
+        return "3mo", "1d"
+    if normalized_range == "6m":
+        return "6mo", "1d"
+    if normalized_range == "1y":
+        return "1y", "1d"
+    raise UnknownTickerError("'range' must be one of '1d', '7d', '1m', '3m', '6m', or '1y'")
 
-    timestamps = []
-    prices = []
+
+def _format_chart_points(history):
+    points = []
     for timestamp, row in history.iterrows():
         price = row.get("Close")
         if price is None:
@@ -205,83 +217,17 @@ def _sample_intraday_points(history, target_count=4):
         ts = _coerce_utc_datetime(timestamp)
         if ts is None:
             continue
-        timestamps.append(ts)
-        prices.append(float(price))
-
-    if not timestamps:
-        return []
-
-    if len(timestamps) <= target_count:
-        return [
-            {"timestamp": ts, "price": price, "source": "yahoo"}
-            for ts, price in zip(timestamps, prices)
-        ]
-
-    indices = []
-    for offset in range(target_count):
-        index = int(round(offset * (len(timestamps) - 1) / (target_count - 1)))
-        if indices and index <= indices[-1]:
-            index = indices[-1] + 1
-        if index >= len(timestamps):
-            index = len(timestamps) - 1
-        indices.append(index)
-
-    return [
-        {"timestamp": timestamps[index], "price": prices[index], "source": "yahoo"}
-        for index in indices
-    ]
+        points.append({"timestamp": ts.isoformat().replace("+00:00", "Z"), "price": float(price)})
+    return points
 
 
 def collect_and_store_price_series(symbol, security_id, range_key="1d", db_session=None):
-    """Collect a chart-ready series for a symbol and persist it for analytics reuse."""
-    normalized_range = (range_key or "1d").lower()
-
-    existing_points = _get_series_from_db(security_id, normalized_range, db_session=db_session)
-    if normalized_range == "1d" and len(existing_points) >= 4:
-        return [
-            {"timestamp": item["timestamp"].isoformat().replace("+00:00", "Z"), "price": item["price"]}
-            for item in existing_points
-        ]
-
-    if normalized_range != "1d" and existing_points:
-        return [
-            {"timestamp": item["timestamp"].isoformat().replace("+00:00", "Z"), "price": item["price"]}
-            for item in existing_points
-        ]
-
+    """Collect a chart-ready series for a symbol without persisting market history."""
+    period, interval = _chart_period_interval(range_key)
     ticker = yf.Ticker(symbol)
-
-    if normalized_range == "1d":
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            history = ticker.history(period="1d", interval="5m", auto_adjust=False)
-
-        points = _sample_intraday_points(history, target_count=4)
-    else:
-        window_days = 7 if normalized_range == "7d" else 30 if normalized_range == "1m" else 1
-        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            history = ticker.history(period="1mo", interval="1d", auto_adjust=False)
-
-        points = []
-        for timestamp, row in history.iterrows():
-            price = row.get("Close")
-            if price is None:
-                continue
-            ts = _coerce_utc_datetime(timestamp)
-            if ts is None or ts < cutoff:
-                continue
-            points.append({"timestamp": ts, "price": float(price), "source": "yahoo"})
-
-    if points:
-        _persist_points(security_id, points, db_session=db_session)
-    return [
-        {
-            "timestamp": item["timestamp"].isoformat().replace("+00:00", "Z"),
-            "price": item["price"],
-        }
-        for item in points
-    ]
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        history = ticker.history(period=period, interval=interval, auto_adjust=False)
+    return _format_chart_points(history)
 
 
 class MarketPriceService:

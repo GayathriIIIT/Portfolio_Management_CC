@@ -82,7 +82,7 @@ def test_get_portfolio_analytics(client):
     assert body["profit_loss_percentage"] == 90.0
 
 
-def test_refresh_portfolio_prices_persists_live_quotes(client):
+def test_refresh_portfolio_prices_returns_live_quotes_without_persisting(client):
     created = _create_portfolio(client).get_json()
     client.post(
         f"/api/portfolios/{created['id']}/holdings",
@@ -102,11 +102,10 @@ def test_refresh_portfolio_prices_persists_live_quotes(client):
     assert body["portfolio"]["holdings"][1]["current_price"] == 420.0
 
     persisted_prices = MarketPrice.query.order_by(MarketPrice.id).all()
-    assert len(persisted_prices) == 2
-    assert [record.price for record in persisted_prices] == [190.0, 420.0]
+    assert len(persisted_prices) == 0
 
 
-def test_portfolio_chart_endpoint_returns_points_and_persists_series(client, monkeypatch):
+def test_portfolio_chart_endpoint_returns_points_without_persisting(client, monkeypatch):
     created = _create_portfolio(client).get_json()
     client.post(
         f"/api/portfolios/{created['id']}/holdings",
@@ -114,21 +113,10 @@ def test_portfolio_chart_endpoint_returns_points_and_persists_series(client, mon
     )
 
     def fake_collect(symbol, security_id, range_key, db_session=None):
-        points = [
+        return [
             {"timestamp": "2024-01-01T09:00:00Z", "price": 100.0},
             {"timestamp": "2024-01-01T09:05:00Z", "price": 101.0},
         ]
-        for item in points:
-            db_session.add(
-                MarketPrice(
-                    security_id=security_id,
-                    price=item["price"],
-                    as_of=datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")),
-                    source="mock",
-                )
-            )
-        db_session.commit()
-        return points
 
     monkeypatch.setattr(portfolios_module.market_price_service, "collect_and_store_price_series", fake_collect)
 
@@ -138,7 +126,7 @@ def test_portfolio_chart_endpoint_returns_points_and_persists_series(client, mon
     body = resp.get_json()
     assert body["range"] == "1d"
     assert body["points"][0]["price"] == 100.0
-    assert len(MarketPrice.query.all()) == 2
+    assert len(MarketPrice.query.all()) == 0
 
 
 def test_portfolio_what_if_analysis(client):

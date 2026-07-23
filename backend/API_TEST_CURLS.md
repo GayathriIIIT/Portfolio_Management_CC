@@ -28,7 +28,7 @@ curl -X GET "http://127.0.0.1:5000/api/portfolios"
 
 ## 4. Get one portfolio by ID
 ```bash
-curl -X GET "http://127.0.0.1:5000/api/portfolios/1"
+curl -X GET "http://127.0.0.1:5000/api/portfolios/2"
 ```
 
 ## 5. Update a portfolio
