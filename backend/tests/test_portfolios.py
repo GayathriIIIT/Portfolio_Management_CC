@@ -21,9 +21,10 @@ def test_create_portfolio(client):
     assert body["total_value"] == 0
 
 
-def test_create_portfolio_requires_owner(client):
+def test_create_portfolio_defaults_owner(client):
     resp = client.post("/api/portfolios", json={"name": "Retirement"})
-    assert resp.status_code == 400
+    assert resp.status_code == 201
+    assert resp.get_json()["owner"] == "Default User"
 
 
 def test_list_portfolios(client):

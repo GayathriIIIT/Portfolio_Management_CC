@@ -363,7 +363,7 @@ def get_portfolio_transactions(portfolio_id):
 @bp.post("")
 def create_portfolio():
     payload = request.get_json(silent=True) or {}
-    owner = _require_string(payload, "owner")
+    owner = _require_string(payload, "owner", required=False) or "Default User"
     name = _require_string(payload, "name")
     base_currency = _require_string(payload, "base_currency", required=False) or "USD"
 
@@ -867,3 +867,101 @@ def delete_holding(portfolio_id, holding_id):
     db.session.delete(holding)
     db.session.commit()
     return "", 204
+
+
+@bp.post("/<int:portfolio_id>/deposit")
+def deposit_cash(portfolio_id):
+    portfolio = _get_portfolio_or_404(portfolio_id)
+    payload = request.get_json(silent=True) or {}
+    
+    amount = _require_positive_number(payload, "amount")
+    currency = payload.get("currency", "USD").upper()
+    symbol = f"{currency}-CASH"
+    
+    security = Security.query.filter_by(symbol=symbol).first()
+    if security is None:
+        security = Security(
+            symbol=symbol,
+            name=f"{currency} Cash",
+            type="CASH",
+            currency=currency,
+            interest_rate=0.045
+        )
+        db.session.add(security)
+        db.session.flush()
+
+    holding = SecurityHolding.query.filter_by(
+        portfolio_id=portfolio.id, security_id=security.id
+    ).first()
+    
+    if holding is None:
+        holding = SecurityHolding(
+            portfolio_id=portfolio.id,
+            security_id=security.id,
+            quantity=amount,
+            avg_cost=1.0,
+        )
+        db.session.add(holding)
+    else:
+        holding.quantity = float(holding.quantity) + amount
+
+    transaction = PortfolioTransaction(
+        portfolio_id=portfolio.id,
+        security_id=security.id,
+        txn_type="DEPOSIT",
+        quantity=amount,
+        price=1.0,
+        fees=0.0,
+        executed_at=datetime.now(timezone.utc),
+    )
+    db.session.add(transaction)
+    db.session.commit()
+    
+    return jsonify({
+        "message": "Cash deposited successfully",
+        "holding": _serialize_holding(holding),
+        "transaction": _serialize_transaction(transaction)
+    }), 201
+
+
+@bp.post("/<int:portfolio_id>/withdraw")
+def withdraw_cash(portfolio_id):
+    portfolio = _get_portfolio_or_404(portfolio_id)
+    payload = request.get_json(silent=True) or {}
+    
+    amount = _require_positive_number(payload, "amount")
+    currency = payload.get("currency", "USD").upper()
+    symbol = f"{currency}-CASH"
+    
+    security = Security.query.filter_by(symbol=symbol).first()
+    if security is None:
+        raise NotFoundError(f"Cash position for {currency} not found in this portfolio")
+        
+    holding = SecurityHolding.query.filter_by(
+        portfolio_id=portfolio.id, security_id=security.id
+    ).first()
+    
+    if holding is None or float(holding.quantity) < amount:
+        raise ApiError("Insufficient cash balance for withdrawal", status_code=400)
+        
+    holding.quantity = float(holding.quantity) - amount
+    if float(holding.quantity) == 0.0:
+        db.session.delete(holding)
+        
+    transaction = PortfolioTransaction(
+        portfolio_id=portfolio.id,
+        security_id=security.id,
+        txn_type="WITHDRAW",
+        quantity=amount,
+        price=1.0,
+        fees=0.0,
+        executed_at=datetime.now(timezone.utc),
+    )
+    db.session.add(transaction)
+    db.session.commit()
+    
+    return jsonify({
+        "message": "Cash withdrawn successfully",
+        "transaction": _serialize_transaction(transaction)
+    }), 201
+
