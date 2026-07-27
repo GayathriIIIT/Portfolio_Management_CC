@@ -100,7 +100,7 @@ export function WhatIfPage({ portfolio }) {
     }
 
     setNewSandboxSym('');
-    setNewSandboxQty(10);
+    setNewSandboxQty(1);
   };
 
   const handleRemoveSandboxPosition = (sym) => {
