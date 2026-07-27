@@ -40,7 +40,7 @@ export function WhatIfPage({ portfolio }) {
     }
   });
   const [newSandboxSym, setNewSandboxSym] = useState('');
-  const [newSandboxQty, setNewSandboxQty] = useState(10);
+  const [newSandboxQty, setNewSandboxQty] = useState(1);
 
   const [simulationResult, setSimulationResult] = useState(null);
   const [savedEntries, setSavedEntries] = useState([]);
@@ -100,7 +100,7 @@ export function WhatIfPage({ portfolio }) {
     }
 
     setNewSandboxSym('');
-    setNewSandboxQty(1);
+    setNewSandboxQty(10);
   };
 
   const handleRemoveSandboxPosition = (sym) => {
