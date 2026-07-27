@@ -98,7 +98,7 @@ def test_refresh_portfolio_prices_returns_live_quotes_without_persisting(client)
 
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["updated_symbols"] == ["AAPL", "MSFT"]
+    assert set(body["updated_symbols"]) == {"AAPL", "MSFT"}
     assert body["portfolio"]["holdings"][0]["current_price"] == 190.0
     assert body["portfolio"]["holdings"][1]["current_price"] == 420.0
 

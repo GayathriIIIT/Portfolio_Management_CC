@@ -9,7 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { api } from '../services/api';
-import { TrendingUp, Calendar } from 'lucide-react';
+import { TrendingUp, Calendar, Layers } from 'lucide-react';
 
 const RANGES = [
   { id: '1d', label: '1D' },
@@ -20,24 +20,39 @@ const RANGES = [
   { id: '1y', label: '1Y' },
 ];
 
+const BENCHMARKS = [
+  { id: 'SPY', label: 'S&P 500 (SPY)' },
+  { id: 'QQQ', label: 'Nasdaq 100 (QQQ)' },
+  { id: 'DIA', label: 'Dow Jones (DIA)' },
+  { id: 'VT', label: 'World Stock (VT)' },
+  { id: 'NONE', label: 'None' },
+];
+
 function CustomTooltip({ active, payload, label }) {
   if (active && payload && payload.length) {
-    const dataPoint = payload[0];
-    const value = dataPoint.value;
-    const formattedVal = new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(value);
+    const assetPoint = payload.find((p) => p.dataKey === 'price');
+    const benchPoint = payload.find((p) => p.dataKey === 'benchmarkReturn');
+
+    const formattedVal = assetPoint
+      ? new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+        }).format(assetPoint.value)
+      : null;
 
     return (
-      <div className="custom-chart-tooltip">
-        <div className="tooltip-date">{label}</div>
-        <div className="tooltip-value" style={{ color: 'var(--accent-primary)' }}>
-          {formattedVal}
+      <div className="custom-chart-tooltip" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', boxShadow: 'var(--shadow-md)' }}>
+        <div className="tooltip-date" style={{ fontWeight: '700', fontSize: '0.825rem', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+          {label}
         </div>
-        {payload[0].payload.symbol && (
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-            Asset: {payload[0].payload.symbol}
+        {assetPoint && (
+          <div style={{ color: 'var(--accent-primary)', fontWeight: '700', fontSize: '0.95rem' }}>
+            {assetPoint.payload.symbol}: {formattedVal}
+          </div>
+        )}
+        {benchPoint && benchPoint.value !== undefined && (
+          <div style={{ color: '#f59e0b', fontWeight: '600', fontSize: '0.825rem', marginTop: '4px' }}>
+            Benchmark ({assetPoint?.payload?.benchmarkName || 'Market'}): {benchPoint.value >= 0 ? '+' : ''}{benchPoint.value.toFixed(2)}%
           </div>
         )}
       </div>
@@ -48,12 +63,14 @@ function CustomTooltip({ active, payload, label }) {
 
 export function PerformanceChart({ portfolioId }) {
   const [range, setRange] = useState('1m');
+  const [benchmark, setBenchmark] = useState('SPY');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   
   const [seriesList, setSeriesList] = useState([]);
   const [symbolsList, setSymbolsList] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState('');
+  const [benchmarkData, setBenchmarkData] = useState(null);
 
   useEffect(() => {
     if (!portfolioId) return;
@@ -63,7 +80,7 @@ export function PerformanceChart({ portfolioId }) {
     setError(null);
 
     api
-      .getPortfolioChartData(portfolioId, range)
+      .getPortfolioChartData(portfolioId, range, benchmark)
       .then((res) => {
         if (!isMounted) return;
         const allSeries = res.series || [];
@@ -71,6 +88,7 @@ export function PerformanceChart({ portfolioId }) {
         
         setSeriesList(allSeries);
         setSymbolsList(symbols);
+        setBenchmarkData(res.benchmark || null);
 
         // Set default selected symbol if empty or not in the new symbols list
         setSelectedSymbol((prev) => {
@@ -88,20 +106,26 @@ export function PerformanceChart({ portfolioId }) {
     return () => {
       isMounted = false;
     };
-  }, [portfolioId, range]);
+  }, [portfolioId, range, benchmark]);
 
-  // Derive active series data
+  // Derive active series data and merge benchmark data
   const activeSeries = seriesList.find((s) => s.symbol === selectedSymbol);
+  const benchPoints = benchmarkData?.points || [];
+
   const chartData = activeSeries
-    ? (activeSeries.points || []).map((pt) => {
+    ? (activeSeries.points || []).map((pt, idx) => {
         let dateLabel = pt.timestamp || pt.as_of;
         if (dateLabel && dateLabel.includes('T')) {
           dateLabel = dateLabel.split('T')[0];
         }
+        const benchPt = benchPoints[idx] || benchPoints.find((b) => (b.timestamp || '').split('T')[0] === dateLabel);
+
         return {
           date: dateLabel || 'N/A',
           price: Number(pt.price || 0),
           symbol: selectedSymbol,
+          benchmarkReturn: benchPt ? Number(benchPt.pct_return || 0) : undefined,
+          benchmarkName: benchmarkData?.name || benchmark,
         };
       })
     : [];
@@ -121,18 +145,18 @@ export function PerformanceChart({ portfolioId }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '1.1rem' }}>
             <TrendingUp size={20} style={{ color: 'var(--accent-primary)' }} />
-            <span>Asset Performance Analytics</span>
+            <span>Asset Performance & Benchmark Analytics</span>
           </div>
           <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)' }}>
-            Historical security valuation tracking over selected time horizon
+            Historical security valuation tracking relative to market benchmark indexes
           </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          {/* Ticker / Symbol Selector */}
+          {/* Ticker Selector */}
           {symbolsList.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '0.775rem', color: 'var(--text-secondary)', fontWeight: '700' }}>Ticker:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '0.775rem', color: 'var(--text-secondary)', fontWeight: '700' }}>Asset:</span>
               <select
                 className="form-select"
                 style={{ height: '32px', fontSize: '0.8rem', padding: '0 8px', width: '110px' }}
@@ -147,6 +171,23 @@ export function PerformanceChart({ portfolioId }) {
               </select>
             </div>
           )}
+
+          {/* Benchmark Index Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '0.775rem', color: 'var(--text-secondary)', fontWeight: '700' }}>Benchmark:</span>
+            <select
+              className="form-select"
+              style={{ height: '32px', fontSize: '0.8rem', padding: '0 8px', width: '150px' }}
+              value={benchmark}
+              onChange={(e) => setBenchmark(e.target.value)}
+            >
+              {BENCHMARKS.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Time Range Selector */}
           <div style={{ display: 'flex', gap: '4px', background: 'var(--bg-app)', padding: '4px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
@@ -200,6 +241,7 @@ export function PerformanceChart({ portfolioId }) {
                 axisLine={false}
               />
               <YAxis
+                yAxisId="left"
                 stroke="var(--text-secondary)"
                 fontSize={12}
                 tickLine={false}
@@ -207,8 +249,21 @@ export function PerformanceChart({ portfolioId }) {
                 tickFormatter={(val) => `$${val}`}
                 domain={['auto', 'auto']}
               />
+              {benchmark !== 'NONE' && (
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  stroke="#f59e0b"
+                  fontSize={12}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(val) => `${val >= 0 ? '+' : ''}${val}%`}
+                  domain={['auto', 'auto']}
+                />
+              )}
               <Tooltip content={<CustomTooltip />} />
               <Line
+                yAxisId="left"
                 type="monotone"
                 dataKey="price"
                 stroke="var(--accent-primary)"
@@ -216,6 +271,18 @@ export function PerformanceChart({ portfolioId }) {
                 dot={{ r: 3, fill: 'var(--accent-primary)' }}
                 activeDot={{ r: 6, stroke: 'var(--bg-card)', strokeWidth: 2 }}
               />
+              {benchmark !== 'NONE' && (
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="benchmarkReturn"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
+                  dot={false}
+                  activeDot={{ r: 5, fill: '#f59e0b' }}
+                />
+              )}
             </LineChart>
           </ResponsiveContainer>
         </div>

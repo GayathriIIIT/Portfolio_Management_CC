@@ -39,7 +39,8 @@ export const api = {
 
   // Analytics & Performance Charts
   getPortfolioAnalytics: (id) => request(`${API_BASE}/${id}/analytics`),
-  getPortfolioChartData: (id, range = '1m') => request(`${API_BASE}/${id}/analytics/chart?range=${range}`),
+  getPortfolioChartData: (id, range = '1m', benchmark = 'SPY') =>
+    request(`${API_BASE}/${id}/analytics/chart?range=${range}&benchmark=${encodeURIComponent(benchmark)}`),
   refreshPortfolioPrices: (id, payload = {}) => request(`${API_BASE}/${id}/refresh-prices`, { method: 'POST', body: payload }),
 
   // Holdings

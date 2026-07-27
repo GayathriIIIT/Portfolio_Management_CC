@@ -34,21 +34,27 @@ def _get_price_for_holding(holding, override_prices=None):
         return purchase_price
 
 
-def _serialize_holding(holding, override_prices=None):
+def _serialize_holding(holding, override_prices=None, base_currency="USD"):
     symbol = holding.security.symbol
     quantity = float(holding.quantity)
-    purchase_price = float(holding.avg_cost)
+    raw_purchase_price = float(holding.avg_cost)
     security_type = holding.security.type
+    sec_currency = holding.security.currency or "USD"
 
     if override_prices is not None and symbol in override_prices:
-        current_price = float(override_prices[symbol])
+        raw_current_price = float(override_prices[symbol])
     elif security_type in ("CASH", "BOND"):
-        current_price = purchase_price
+        raw_current_price = raw_purchase_price
     else:
         try:
-            current_price = float(_price_service().get_current_price(symbol))
+            raw_current_price = float(_price_service().get_current_price(symbol))
         except UnknownTickerError:
-            current_price = purchase_price
+            raw_current_price = raw_purchase_price
+
+    fx_rate = _price_service().get_fx_rate(sec_currency, base_currency)
+
+    current_price = raw_current_price * fx_rate
+    purchase_price = raw_purchase_price * fx_rate
 
     market_value = current_price * quantity
     cost_basis = purchase_price * quantity
@@ -60,11 +66,16 @@ def _serialize_holding(holding, override_prices=None):
         "symbol": symbol,
         "name": holding.security.name,
         "exchange": holding.security.exchange,
-        "currency": holding.security.currency or "USD",
+        "currency": sec_currency,
+        "base_currency": base_currency,
+        "fx_rate": fx_rate,
         "quantity": quantity,
+        "native_purchase_price": raw_purchase_price,
+        "native_current_price": raw_current_price,
         "purchase_price": purchase_price,
         "current_price": current_price,
         "market_value": market_value,
+        "cost_basis": cost_basis,
         "unrealized_pl": unrealized_pl,
         "unrealized_pl_pct": unrealized_pl_pct,
     }
@@ -74,20 +85,20 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
     invested_value = 0.0
     current_value = 0.0
     holdings = []
+    base_curr = portfolio.base_currency or "USD"
 
     for holding in portfolio.holdings:
-        quantity = float(holding.quantity)
-        purchase_price = float(holding.avg_cost)
-        current_price = _get_price_for_holding(holding, override_prices=override_prices)
-        invested_value += quantity * purchase_price
-        current_value += quantity * current_price
-        holdings.append(_serialize_holding(holding, override_prices=override_prices))
+        serialized = _serialize_holding(holding, override_prices=override_prices, base_currency=base_curr)
+        invested_value += serialized["cost_basis"]
+        current_value += serialized["market_value"]
+        holdings.append(serialized)
 
     profit_loss = current_value - invested_value
     profit_loss_percentage = (profit_loss / invested_value * 100) if invested_value else 0.0
 
     return {
         "portfolio_id": portfolio.id,
+        "base_currency": base_curr,
         "invested_value": invested_value,
         "current_value": current_value,
         "profit_loss": profit_loss,
@@ -324,15 +335,16 @@ def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None):
 # ---------------------------------------------------------------------------
 
 def _serialize_portfolio(portfolio, include_holdings=True, override_prices=None):
+    base_curr = portfolio.base_currency or "USD"
     data = {
         "id": portfolio.id,
         "owner": portfolio.owner,
         "name": portfolio.name,
-        "base_currency": portfolio.base_currency,
+        "base_currency": base_curr,
         "created_at": portfolio.created_at.isoformat() if portfolio.created_at else None,
     }
     if include_holdings:
-        holdings = [_serialize_holding(h, override_prices=override_prices) for h in portfolio.holdings]
+        holdings = [_serialize_holding(h, override_prices=override_prices, base_currency=base_curr) for h in portfolio.holdings]
         data["holdings"] = holdings
         data["total_value"] = sum(h["market_value"] for h in holdings)
     else:
@@ -408,6 +420,11 @@ def get_portfolio_chart_data(portfolio_id):
     if range_key not in {"1d", "7d", "1m", "3m", "6m", "1y"}:
         raise ApiError("'range' must be one of '1d', '7d', '1m', '3m', '6m', or '1y'", status_code=400)
 
+    benchmark_sym = request.args.get("benchmark", "SPY")
+    benchmark_data = None
+    if benchmark_sym and benchmark_sym.strip().upper() not in {"NONE", "OFF", ""}:
+        benchmark_data = market_price_service.collect_benchmark_series(benchmark_sym.strip(), range_key=range_key)
+
     series = []
     for holding in portfolio.holdings:
         if holding.security.type in {"CASH", "BOND"}:
@@ -426,6 +443,7 @@ def get_portfolio_chart_data(portfolio_id):
             "range": range_key,
             "series": series,
             "points": series[0]["points"] if series else [],
+            "benchmark": benchmark_data,
         }
     )
 
@@ -445,15 +463,11 @@ def refresh_portfolio_prices(portfolio_id):
 
     override_prices = {}
     updated_symbols = []
-    errors = {}
 
-    for symbol in requested_symbols:
-        try:
-            quote = fetch_realtime_quote(symbol)
-        except UnknownTickerError as exc:
-            errors[symbol] = str(exc)
-            continue
+    # Parallel quote fetch using ThreadPoolExecutor
+    fetched_quotes, errors = market_price_service.fetch_quotes_parallel(requested_symbols)
 
+    for symbol, quote in fetched_quotes.items():
         security = Security.query.filter_by(symbol=symbol).first()
         if security is None:
             security = Security(
