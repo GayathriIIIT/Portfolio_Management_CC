@@ -73,15 +73,21 @@ export function WhatIfPage({ portfolio }) {
     e.preventDefault();
     if (!newSandboxSym) return;
     const sym = newSandboxSym.trim().toUpperCase();
+    const qty = Number(newSandboxQty);
+    if (!sym || isNaN(qty) || qty <= 0) {
+      setError('Please provide a valid ticker symbol and positive quantity');
+      return;
+    }
+    setError(null);
     
     setSandboxBasket((prev) => {
       const existingIdx = prev.findIndex((item) => item.symbol === sym);
       if (existingIdx > -1) {
         const copy = [...prev];
-        copy[existingIdx].quantity += Number(newSandboxQty);
+        copy[existingIdx].quantity += qty;
         return copy;
       }
-      return [...prev, { symbol: sym, quantity: Number(newSandboxQty) }];
+      return [...prev, { symbol: sym, quantity: qty }];
     });
 
     // Populate a default override price for this symbol if not present
@@ -124,6 +130,10 @@ export function WhatIfPage({ portfolio }) {
 
         payload.symbols = symbols;
         payload.quantities = quantities;
+      } else {
+        if (activeSymbols.length === 0) {
+          throw new Error('Current portfolio has no active holdings to simulate. Please add positions first or switch to Standalone Sandbox Cart.');
+        }
       }
 
       if (priceSource === 'manual') {
@@ -141,13 +151,19 @@ export function WhatIfPage({ portfolio }) {
         });
 
         if (missingPrice) {
-          throw new Error('Please fill in a valid hypothetical price for all active tickers');
+          throw new Error('Please fill in a valid positive hypothetical price for all active tickers');
         }
 
         payload.prices = prices;
       } else {
         if (!targetDate) {
           throw new Error('Please select a valid historical date');
+        }
+        const selectedDate = new Date(targetDate);
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        if (selectedDate > today) {
+          throw new Error('Target trading date cannot be in the future');
         }
         payload.date = targetDate;
         payload.price_type = priceType;
@@ -165,6 +181,7 @@ export function WhatIfPage({ portfolio }) {
 
   const handleDeleteEntry = async (whatifId) => {
     if (!portfolio?.id) return;
+    if (!window.confirm('Are you sure you want to delete this scenario ledger entry?')) return;
     try {
       await api.deleteWhatIfEntry(portfolio.id, whatifId);
       loadSavedWhatIfs();
@@ -363,6 +380,7 @@ export function WhatIfPage({ portfolio }) {
                     type="date"
                     className="form-input"
                     style={{ height: '36px' }}
+                    max={new Date().toISOString().split('T')[0]}
                     value={targetDate}
                     onChange={(e) => setTargetDate(e.target.value)}
                     required

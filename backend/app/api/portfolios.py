@@ -200,16 +200,23 @@ def _get_live_price(symbol):
 
 
 def _coerce_date(value):
+    d = None
     if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
+        d = value.date()
+    elif isinstance(value, date):
+        d = value
+    elif isinstance(value, str):
         try:
-            return date.fromisoformat(value)
+            d = date.fromisoformat(value)
         except ValueError as exc:
             raise ApiError("'date' must be an ISO date string in YYYY-MM-DD format") from exc
-    raise ApiError("'date' must be a valid date")
+    else:
+        raise ApiError("'date' must be a valid date")
+
+    if d > date.today():
+        raise ApiError("'date' cannot be in the future", status_code=400)
+    return d
+
 
 
 def _normalize_price_type(value):
@@ -518,6 +525,9 @@ def portfolio_what_if(portfolio_id):
                 raise ApiError(f"Price for '{symbol}' must be a positive number")
             override_prices[symbol.upper().strip()] = float(value)
 
+    if not custom_symbols and not override_prices and len(portfolio.holdings) == 0:
+        raise ApiError("Portfolio has no active holdings to simulate", status_code=400)
+
     if "price" in payload:
         price_value = payload.get("price")
         if isinstance(price_value, bool) or not isinstance(price_value, (int, float)) or price_value <= 0:
@@ -557,40 +567,44 @@ def portfolio_what_if(portfolio_id):
     elif not custom_symbols and not override_prices:
         raise ApiError("Provide either 'prices', 'price', or 'date' in the request payload")
 
-    for symbol, value in override_prices.items():
-        security = _get_or_create_security(symbol)
-        existing_row = WhatifPrice.query.filter_by(
-            portfolio_id=portfolio.id,
-            scenario_name=scenario_name,
-            security_id=security.id,
-        ).first()
-        if existing_row is None:
-            db.session.add(
-                WhatifPrice(
-                    portfolio_id=portfolio.id,
-                    scenario_name=scenario_name,
-                    security_id=security.id,
-                    hypothetical_price=value,
-                    price_type=price_type if price_mode == "historical" else None,
-                    trade_date=trade_date,
-                    price_source=price_mode,
+    try:
+        for symbol, value in override_prices.items():
+            security = _get_or_create_security(symbol)
+            existing_row = WhatifPrice.query.filter_by(
+                portfolio_id=portfolio.id,
+                scenario_name=scenario_name,
+                security_id=security.id,
+            ).first()
+            if existing_row is None:
+                db.session.add(
+                    WhatifPrice(
+                        portfolio_id=portfolio.id,
+                        scenario_name=scenario_name,
+                        security_id=security.id,
+                        hypothetical_price=value,
+                        price_type=price_type if price_mode == "historical" else None,
+                        trade_date=trade_date,
+                        price_source=price_mode,
+                    )
                 )
-            )
+            else:
+                existing_row.hypothetical_price = value
+                existing_row.price_type = price_type if price_mode == "historical" else None
+                existing_row.trade_date = trade_date
+                existing_row.price_source = price_mode
+
+        db.session.commit()
+
+        if custom_symbols:
+            result = _compute_symbol_cart_metrics(custom_symbols, override_prices, quantities=quantities)
         else:
-            existing_row.hypothetical_price = value
-            existing_row.price_type = price_type if price_mode == "historical" else None
-            existing_row.trade_date = trade_date
-            existing_row.price_source = price_mode
+            result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
 
-    db.session.commit()
-
-    if custom_symbols:
-        result = _compute_symbol_cart_metrics(custom_symbols, override_prices, quantities=quantities)
-    else:
-        result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
-
-    result["scenario_name"] = scenario_name
-    return jsonify(result)
+        result["scenario_name"] = scenario_name
+        return jsonify(result)
+    except Exception:
+        db.session.rollback()
+        raise
 
 
 @bp.get("/<int:portfolio_id>/what-if")
@@ -702,7 +716,7 @@ def buy_holding(portfolio_id):
     payload = request.get_json(silent=True) or {}
 
     symbol = _require_string(payload, "symbol").upper()
-    quantity = _require_positive_int(payload, "quantity")
+    quantity = _require_positive_number(payload, "quantity")
     price = payload.get("price")
     if price is None:
         try:
@@ -718,6 +732,24 @@ def buy_holding(portfolio_id):
     if isinstance(fees, bool) or not isinstance(fees, (int, float)) or fees < 0:
         raise ApiError("'fees' must be a non-negative number")
     fees = float(fees)
+
+    total_cost = (price * quantity) + fees
+
+    # Adjust cash balance if cash position exists
+    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
+    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
+    if cash_sec is not None:
+        cash_holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=cash_sec.id
+        ).first()
+        if cash_holding is not None:
+            avail_cash = float(cash_holding.quantity)
+            if avail_cash < total_cost:
+                raise ApiError(
+                    f"Insufficient cash balance. Order total: ${total_cost:.2f}, Available cash: ${avail_cash:.2f}",
+                    status_code=400,
+                )
+            cash_holding.quantity = avail_cash - total_cost
 
     security = _get_or_create_security(symbol)
     holding = SecurityHolding.query.filter_by(
@@ -771,7 +803,7 @@ def sell_holding(portfolio_id):
     payload = request.get_json(silent=True) or {}
 
     symbol = _require_string(payload, "symbol").upper()
-    quantity = _require_positive_int(payload, "quantity")
+    quantity = _require_positive_number(payload, "quantity")
     price = payload.get("price")
     if price is None:
         try:
@@ -782,6 +814,15 @@ def sell_holding(portfolio_id):
         raise ApiError("'price' must be a positive number")
     else:
         price = float(price)
+
+    fees = payload.get("fees", 0)
+    if isinstance(fees, bool) or not isinstance(fees, (int, float)) or fees < 0:
+        raise ApiError("'fees' must be a non-negative number")
+    fees = float(fees)
+
+    net_proceeds = (price * quantity) - fees
+    if net_proceeds < 0:
+        raise ApiError("Brokerage fees exceed trade proceeds", status_code=400)
 
     security = Security.query.filter_by(symbol=symbol).first()
     if security is None:
@@ -797,15 +838,20 @@ def sell_holding(portfolio_id):
     if quantity > existing_qty:
         raise ApiError("Sell quantity exceeds current holding quantity", status_code=400)
 
-    fees = payload.get("fees", 0)
-    if isinstance(fees, bool) or not isinstance(fees, (int, float)) or fees < 0:
-        raise ApiError("'fees' must be a non-negative number")
-    fees = float(fees)
-
     if existing_qty == quantity:
         db.session.delete(holding)
     else:
         holding.quantity = existing_qty - quantity
+
+    # Credit proceeds to cash balance if cash position exists
+    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
+    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
+    if cash_sec is not None:
+        cash_holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=cash_sec.id
+        ).first()
+        if cash_holding is not None:
+            cash_holding.quantity = float(cash_holding.quantity) + net_proceeds
 
     transaction = PortfolioTransaction(
         portfolio_id=portfolio.id,

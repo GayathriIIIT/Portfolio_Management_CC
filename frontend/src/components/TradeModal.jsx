@@ -67,13 +67,31 @@ export function TradeModal({
     setSuccessMsg(null);
 
     try {
+      const sym = symbol.trim().toUpperCase();
+      const qty = Number(quantity);
+      const feeVal = Number(fees || 0);
+
+      if (!sym) {
+        throw new Error('Please enter or select a valid ticker symbol');
+      }
+      if (isNaN(qty) || qty <= 0) {
+        throw new Error('Share quantity must be a positive number');
+      }
+      if (isNaN(feeVal) || feeVal < 0) {
+        throw new Error('Brokerage fee must be a non-negative number');
+      }
+
       const payload = {
-        symbol: symbol.trim().toUpperCase(),
-        quantity: Number(quantity),
-        fees: Number(fees || 0),
+        symbol: sym,
+        quantity: qty,
+        fees: feeVal,
       };
       if (price) {
-        payload.price = Number(price);
+        const priceVal = Number(price);
+        if (isNaN(priceVal) || priceVal <= 0) {
+          throw new Error('Execution price must be a positive number');
+        }
+        payload.price = priceVal;
       }
 
       if (txnType === 'BUY') {

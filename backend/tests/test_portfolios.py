@@ -342,3 +342,72 @@ def test_buy_and_sell_endpoints(client):
     holdings = holdings_resp.get_json()
     assert len(holdings) == 1
     assert holdings[0]["quantity"] == 1.0
+
+
+def test_whatif_future_date_rejected(client):
+    created = _create_portfolio(client).get_json()
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if",
+        json={"scenario_name": "future", "date": "2099-01-01"},
+    )
+    assert resp.status_code == 400
+    assert "cannot be in the future" in resp.get_json()["error"]
+
+
+def test_whatif_empty_portfolio_rejected(client):
+    created = _create_portfolio(client).get_json()
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if",
+        json={"scenario_name": "empty"},
+    )
+    assert resp.status_code == 400
+    assert "no active holdings" in resp.get_json()["error"]
+
+
+def test_buy_order_insufficient_cash_rejected(client):
+    created = _create_portfolio(client).get_json()
+    # Deposit $100 cash
+    client.post(f"/api/portfolios/{created['id']}/deposit", json={"amount": 100.0, "currency": "USD"})
+
+    # Try to buy $500 worth of stock with $100 cash
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/buy",
+        json={"symbol": "AAPL", "quantity": 5, "price": 100.0},
+    )
+    assert resp.status_code == 400
+    assert "Insufficient cash balance" in resp.get_json()["error"]
+
+
+def test_buy_and_sell_adjusts_cash_balance(client):
+    created = _create_portfolio(client).get_json()
+    # Deposit $1,000 cash
+    client.post(f"/api/portfolios/{created['id']}/deposit", json={"amount": 1000.0, "currency": "USD"})
+
+    # Buy 2 shares at $200 each = $400
+    buy_resp = client.post(
+        f"/api/portfolios/{created['id']}/buy",
+        json={"symbol": "AAPL", "quantity": 2, "price": 200.0},
+    )
+    assert buy_resp.status_code == 201
+
+    # Check cash balance dropped to $600
+    holdings_resp = client.get(f"/api/portfolios/{created['id']}/holdings")
+    cash_holding = next(h for h in holdings_resp.get_json() if h["symbol"] == "USD-CASH")
+    assert cash_holding["quantity"] == 600.0
+
+    # Sell 1 share at $250 = $250 proceeds
+    sell_resp = client.post(
+        f"/api/portfolios/{created['id']}/sell",
+        json={"symbol": "AAPL", "quantity": 1, "price": 250.0},
+    )
+    assert sell_resp.status_code == 201
+
+    # Check cash balance increased to $850
+    holdings_resp = client.get(f"/api/portfolios/{created['id']}/holdings")
+    cash_holding = next(h for h in holdings_resp.get_json() if h["symbol"] == "USD-CASH")
+    assert cash_holding["quantity"] == 850.0
+

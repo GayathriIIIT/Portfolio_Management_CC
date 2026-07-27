@@ -27,17 +27,22 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, onSuccess }) {
     setSuccessMsg(null);
 
     try {
+      const amtVal = Number(amount);
+      if (isNaN(amtVal) || amtVal <= 0) {
+        throw new Error('Cash amount must be a positive number');
+      }
+
       const payload = {
-        amount: Number(amount),
+        amount: amtVal,
         currency: currency,
       };
 
       if (actionType === 'DEPOSIT') {
         await api.depositCash(portfolioId, payload);
-        setSuccessMsg(`Successfully deposited $${amount} to cash balance!`);
+        setSuccessMsg(`Successfully deposited $${amtVal.toFixed(2)} to cash balance!`);
       } else {
         await api.withdrawCash(portfolioId, payload);
-        setSuccessMsg(`Successfully withdrew $${amount} from cash balance!`);
+        setSuccessMsg(`Successfully withdrew $${amtVal.toFixed(2)} from cash balance!`);
       }
 
       setTimeout(() => {

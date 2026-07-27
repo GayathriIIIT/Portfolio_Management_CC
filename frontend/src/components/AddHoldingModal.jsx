@@ -20,10 +20,24 @@ export function AddHoldingModal({ isOpen, onClose, portfolioId, onSuccess }) {
     setSuccessMsg(null);
 
     try {
+      const sym = symbol.trim().toUpperCase();
+      const qty = Number(quantity);
+      const priceVal = Number(purchasePrice);
+
+      if (!sym) {
+        throw new Error('Please enter a valid ticker symbol');
+      }
+      if (isNaN(qty) || qty <= 0) {
+        throw new Error('Quantity must be a positive number');
+      }
+      if (isNaN(priceVal) || priceVal <= 0) {
+        throw new Error('Purchase price must be a positive number');
+      }
+
       await api.addHolding(portfolioId, {
-        symbol: symbol.trim().toUpperCase(),
-        quantity: Number(quantity),
-        purchase_price: Number(purchasePrice),
+        symbol: sym,
+        quantity: qty,
+        purchase_price: priceVal,
       });
 
       setSuccessMsg('Position added to portfolio successfully!');
