@@ -10,10 +10,14 @@ export function WhatIfPage({ portfolio }) {
   const [simScope, setSimScope] = useState('sandbox'); 
   
   // Tabs: 'manual' (specify prices) or 'historical' (specify date & type)
-  const [priceSource, setPriceSource] = useState('manual');
+  const [priceSource, setPriceSource] = useState('historical');
   
   // Date selection fields
-  const [targetDate, setTargetDate] = useState('');
+  const [targetDate, setTargetDate] = useState(() => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return yesterday.toISOString().split('T')[0];
+  });
   const [priceType, setPriceType] = useState('close');
 
   // Manual price overrides dictionary (e.g. { AAPL: '150', TSLA: '220' })
