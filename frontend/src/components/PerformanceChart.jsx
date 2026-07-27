@@ -40,10 +40,13 @@ function CustomTooltip({ active, payload, label }) {
         }).format(assetPoint.value)
       : null;
 
+    // Use raw timestamp if available for accurate date display
+    const rawTimestamp = assetPoint?.payload?.rawTimestamp || label;
+
     return (
       <div className="custom-chart-tooltip" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: '8px', boxShadow: 'var(--shadow-md)' }}>
         <div className="tooltip-date" style={{ fontWeight: '700', fontSize: '0.825rem', marginBottom: '6px', color: 'var(--text-secondary)' }}>
-          {label}
+          {new Date(rawTimestamp).toLocaleString([], { dateStyle: 'short', timeStyle: rawTimestamp.includes('T') ? 'short' : undefined })}
         </div>
         {assetPoint && (
           <div style={{ color: 'var(--accent-primary)', fontWeight: '700', fontSize: '0.95rem' }}>
@@ -112,19 +115,50 @@ export function PerformanceChart({ portfolioId }) {
   const activeSeries = seriesList.find((s) => s.symbol === selectedSymbol);
   const benchPoints = benchmarkData?.points || [];
 
+  // Build a timestamp-keyed map for O(1) benchmark lookup
+  const benchByTimestamp = {};
+  benchPoints.forEach((b) => {
+    if (b.timestamp) benchByTimestamp[b.timestamp] = b;
+  });
+
+  // Determine if the range has sub-daily intervals (1d = 5m, 7d = 30m, 1m = 1h)
+  const isIntraday = ['1d', '7d', '1m'].includes(range);
+
+  const formatXLabel = (isoTimestamp) => {
+    if (!isoTimestamp || !isoTimestamp.includes('T')) return isoTimestamp || 'N/A';
+    const [datePart, timePart] = isoTimestamp.split('T');
+    if (isIntraday) {
+      // Show HH:MM in local time
+      try {
+        const d = new Date(isoTimestamp);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch (_) {
+        return timePart ? timePart.substring(0, 5) : datePart;
+      }
+    }
+    // Multi-day: show MMM DD
+    try {
+      const d = new Date(datePart + 'T00:00:00');
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    } catch (_) {
+      return datePart;
+    }
+  };
+
   const chartData = activeSeries
     ? (activeSeries.points || []).map((pt, idx) => {
-        let dateLabel = pt.timestamp || pt.as_of;
-        if (dateLabel && dateLabel.includes('T')) {
-          dateLabel = dateLabel.split('T')[0];
-        }
-        const benchPt = benchPoints[idx] || benchPoints.find((b) => (b.timestamp || '').split('T')[0] === dateLabel);
+        const rawTimestamp = pt.timestamp || pt.as_of || '';
+        const label = formatXLabel(rawTimestamp);
+
+        // Look up benchmark by exact timestamp first, then by array index
+        const benchPt = benchByTimestamp[rawTimestamp] || benchPoints[idx] || null;
 
         return {
-          date: dateLabel || 'N/A',
+          date: label,
+          rawTimestamp,
           price: Number(pt.price || 0),
           symbol: selectedSymbol,
-          benchmarkReturn: benchPt ? Number(benchPt.pct_return || 0) : undefined,
+          benchmarkReturn: benchPt != null ? Number(benchPt.pct_return) : undefined,
           benchmarkName: benchmarkData?.name || benchmark,
         };
       })
@@ -279,8 +313,8 @@ export function PerformanceChart({ portfolioId }) {
                   stroke="#f59e0b"
                   strokeWidth={2}
                   strokeDasharray="4 4"
-                  dot={false}
-                  activeDot={{ r: 5, fill: '#f59e0b' }}
+                  dot={{ r: 3, fill: '#f59e0b' }}
+                  activeDot={{ r: 6, fill: '#f59e0b', stroke: 'var(--bg-card)', strokeWidth: 2 }}
                 />
               )}
             </LineChart>
