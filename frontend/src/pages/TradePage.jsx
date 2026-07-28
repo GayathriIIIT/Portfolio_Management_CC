@@ -12,6 +12,7 @@ export function TradePage({ portfolio, onTradeSuccess }) {
 
   const [quoteInfo, setQuoteInfo] = useState(null);
   const [isFetchingQuote, setIsFetchingQuote] = useState(false);
+  const [fxRate, setFxRate] = useState(1.0);
   const [recentTransactions, setRecentTransactions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -36,11 +37,25 @@ export function TradePage({ portfolio, onTradeSuccess }) {
     if (!symbol || !symbol.trim()) return;
     setIsFetchingQuote(true);
     setError(null);
+    setFxRate(1.0);
     try {
       const res = await api.getRealtimeQuote(symbol.trim());
       setQuoteInfo(res);
       if (res.price) {
         setPrice(res.price);
+      }
+      // Fetch FX rate if stock currency differs from portfolio base currency
+      const stockCurrency = (res.currency || 'USD').toUpperCase();
+      const baseCurrency = (portfolio?.base_currency || 'USD').toUpperCase();
+      if (stockCurrency !== baseCurrency) {
+        try {
+          const fxRes = await api.getRealtimeQuote(`${stockCurrency}${baseCurrency}=X`);
+          if (fxRes?.price && fxRes.price > 0) {
+            setFxRate(parseFloat(fxRes.price));
+          }
+        } catch {
+          // Leave fxRate as 1.0 if lookup fails
+        }
       }
     } catch (err) {
       setError(`Ticker error: ${err.message}`);
@@ -121,7 +136,11 @@ export function TradePage({ portfolio, onTradeSuccess }) {
     return <div className="empty-state">No portfolio selected.</div>;
   }
 
-  const totalValue = (Number(price) || 0) * (Number(quantity) || 0) + Number(fees || 0);
+  const nativeTotalValue = (Number(price) || 0) * (Number(quantity) || 0) + Number(fees || 0);
+  const stockCurrency = (quoteInfo?.currency || portfolio?.base_currency || 'USD').toUpperCase();
+  const baseCurrency = (portfolio?.base_currency || 'USD').toUpperCase();
+  const isCrossCurrency = quoteInfo && stockCurrency !== baseCurrency;
+  const convertedTotal = nativeTotalValue * fxRate;
 
   return (
     <div>
@@ -183,7 +202,12 @@ export function TradePage({ portfolio, onTradeSuccess }) {
               <div style={{ display: 'flex', gap: '8px' }}>
                 <TickerAutocomplete
                   value={symbol}
-                  onChange={setSymbol}
+                  onChange={(val) => {
+                    setSymbol(val);
+                    // Reset quote info and FX rate when symbol changes
+                    setQuoteInfo(null);
+                    setFxRate(1.0);
+                  }}
                   placeholder="e.g. AAPL, TSLA, MSFT"
                   required={true}
                 />
@@ -207,17 +231,32 @@ export function TradePage({ portfolio, onTradeSuccess }) {
                   padding: '12px 16px',
                   borderRadius: 'var(--radius-md)',
                   marginBottom: '16px',
-                  border: '1px solid rgba(37, 99, 235, 0.2)',
+                  border: isCrossCurrency ? '1px solid rgba(234, 179, 8, 0.4)' : '1px solid rgba(37, 99, 235, 0.2)',
                 }}
               >
-                <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'var(--accent-primary)' }}>
-                  {quoteInfo.name} ({quoteInfo.symbol})
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'var(--accent-primary)' }}>
+                    {quoteInfo.name} ({quoteInfo.symbol})
+                  </div>
+                  {quoteInfo.currency && (
+                    <span
+                      className={`badge ${isCrossCurrency ? 'badge-warning' : 'badge-secondary'}`}
+                      style={{ fontSize: '0.75rem', fontWeight: '800' }}
+                    >
+                      {quoteInfo.currency}
+                    </span>
+                  )}
                 </div>
-                <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '4px' }}>
+                <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '6px' }}>
                   <span>Exchange: <strong>{quoteInfo.exchange}</strong></span>
-                  <span>Price: <strong>${quoteInfo.price}</strong></span>
-                  {quoteInfo.currency && <span>Currency: <strong>{quoteInfo.currency}</strong></span>}
+                  <span>Price: <strong>{quoteInfo.currency === 'USD' ? '$' : ''}{quoteInfo.price} {quoteInfo.currency !== 'USD' ? quoteInfo.currency : ''}</strong></span>
                 </div>
+                {isCrossCurrency && (
+                  <div style={{ marginTop: '6px', fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>💱</span>
+                    <span>FX: 1 {stockCurrency} = <strong>{fxRate.toFixed(4)} {baseCurrency}</strong> (auto-fetched)</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -268,17 +307,46 @@ export function TradePage({ portfolio, onTradeSuccess }) {
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--border-color)',
                 marginBottom: '20px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
               }}
             >
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                Total Order Value ({portfolio.base_currency}):
-              </span>
-              <span style={{ fontWeight: '700', fontSize: '1.2rem', color: 'var(--text-primary)' }}>
-                ${totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isCrossCurrency ? '8px' : '0' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Order Value ({stockCurrency}):
+                </span>
+                <span style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--text-primary)' }}>
+                  {stockCurrency === 'USD' ? '$' : ''}{nativeTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {stockCurrency !== 'USD' ? stockCurrency : ''}
+                </span>
+              </div>
+              {isCrossCurrency && (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>
+                      FX Rate ({stockCurrency} → {baseCurrency}):
+                    </span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      1 {stockCurrency} = {fxRate.toFixed(4)} {baseCurrency}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '8px' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '700' }}>
+                      Total Order Value ({baseCurrency}):
+                    </span>
+                    <span style={{ fontWeight: '800', fontSize: '1.2rem', color: 'var(--accent-primary)' }}>
+                      ${convertedTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </>
+              )}
+              {!isCrossCurrency && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Total Order Value ({baseCurrency}):
+                  </span>
+                  <span style={{ fontWeight: '700', fontSize: '1.2rem', color: 'var(--text-primary)' }}>
+                    ${nativeTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
             </div>
 
             <button

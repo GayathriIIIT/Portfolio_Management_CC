@@ -473,24 +473,39 @@ export function WhatIfPage({ portfolio }) {
                   <thead>
                     <tr>
                       <th>Symbol</th>
-                      <th style={{ textAlign: 'right' }}>Simulated Price</th>
-                      <th style={{ textAlign: 'right' }}>Simulated Value</th>
+                      <th style={{ textAlign: 'right' }}>Hyp. / Cost Price</th>
+                      <th style={{ textAlign: 'right' }}>Current Price</th>
+                      <th style={{ textAlign: 'right' }}>Market Value</th>
+                      <th style={{ textAlign: 'right' }}>P&L</th>
                       <th style={{ textAlign: 'right' }}>P&L %</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {simulationResult.holdings.map((h, i) => (
-                      <tr key={i}>
-                        <td style={{ fontWeight: '800' }}>{h.symbol}</td>
-                        <td style={{ textAlign: 'right' }}>${(h.current_price || h.purchase_price || 0).toFixed(2)}</td>
-                        <td style={{ textAlign: 'right', fontWeight: '700' }}>
-                          ${(h.market_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </td>
-                        <td style={{ textAlign: 'right' }} className={(h.unrealized_pl || 0) >= 0 ? 'text-positive' : 'text-negative'}>
-                          {(h.unrealized_pl_pct || 0).toFixed(2)}%
-                        </td>
-                      </tr>
-                    ))}
+                    {simulationResult.holdings.map((h, i) => {
+                      // Sandbox mode uses profit_loss / profit_loss_percentage
+                      // Portfolio mode uses unrealized_pl / unrealized_pl_pct
+                      const pl = h.profit_loss ?? h.unrealized_pl ?? 0;
+                      const plPct = h.profit_loss_percentage ?? h.unrealized_pl_pct ?? 0;
+                      const costPrice = h.hypothetical_price ?? h.purchase_price ?? 0;
+                      const livePrice = h.current_price ?? 0;
+                      const plClass = pl >= 0 ? 'text-positive' : 'text-negative';
+                      return (
+                        <tr key={i}>
+                          <td style={{ fontWeight: '800' }}>{h.symbol}</td>
+                          <td style={{ textAlign: 'right' }}>${costPrice.toFixed(2)}</td>
+                          <td style={{ textAlign: 'right' }}>${livePrice.toFixed(2)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                            ${(h.market_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td style={{ textAlign: 'right' }} className={plClass}>
+                            {pl >= 0 ? '+' : ''}${pl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td style={{ textAlign: 'right' }} className={plClass}>
+                            {pl >= 0 ? '+' : ''}{plPct.toFixed(2)}%
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
