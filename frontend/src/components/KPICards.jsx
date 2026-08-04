@@ -92,25 +92,25 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
       </div>
 
-      {/* 5. Annualized Return (XIRR) */}
-      <div className="card kpi-card">
-        <div className="kpi-header">
-          <span>Annualized Return (XIRR)</span>
-          <Award size={18} style={{ color: '#8b5cf6' }} />
-        </div>
-        <div className={`kpi-value ${xirr != null ? (isXirrPositive ? 'text-positive' : 'text-negative') : ''}`}>
-          {xirr != null ? `${isXirrPositive ? '+' : ''}${xirr.toFixed(2)}%` : 'N/A'}
-        </div>
-        <div className="kpi-subtext" style={{ color: 'var(--text-secondary)' }}>
-          {xirr != null ? (
+      {/* 5. Annualized Return (XIRR) - hidden until the portfolio has been
+          invested for at least a year; annualizing a shorter window is
+          meaningless (it can show absurd figures like millions of %). */}
+      {xirr != null && (
+        <div className="card kpi-card">
+          <div className="kpi-header">
+            <span>Annualized Return (XIRR)</span>
+            <Award size={18} style={{ color: '#8b5cf6' }} />
+          </div>
+          <div className={`kpi-value ${isXirrPositive ? 'text-positive' : 'text-negative'}`}>
+            {`${isXirrPositive ? '+' : ''}${xirr.toFixed(2)}%`}
+          </div>
+          <div className="kpi-subtext" style={{ color: 'var(--text-secondary)' }}>
             <span className={`badge ${isXirrPositive ? 'badge-success' : 'badge-danger'}`}>
               IRR
             </span>
-          ) : (
-            'No transaction history'
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 6. Benchmark Alpha (vs SPY) */}
       <div className="card kpi-card">

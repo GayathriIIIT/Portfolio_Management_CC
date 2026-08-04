@@ -76,24 +76,26 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
         except Exception:
             db.session.rollback()
 
-    # Annualized return (CAGR) of the position.
-    # NOTE: the old formula `(market_value / cost_basis) ** (1 / years) - 1`
-    # divided today's *blended* weighted-average cost (which includes shares
-    # bought later at different dates) by the holding period of only the *first*
-    # purchase. Mixing those two clocks makes the number wrong whenever a
-    # position was averaged-up/down. We now solve the money-weighted IRR (XIRR)
-    # of the security's actual BUY/SELL cash flows instead.
+    # Annualized return (CAGR) of the position. Only meaningful once the position
+    # has been held for at least a year: extrapolating a sub-year gain produces
+    # absurd figures (e.g. a 2-week gain annualized to millions of %), so short
+    # positions report no CAGR. For year+ positions without a money-weighted CAGR
+    # (e.g. cash/bonds with no BUY/SELL ledger rows) we fall back to the simple
+    # total return so the cell is never blank.
     cagr = None
-    if cost_basis > 0 and market_value >= 0:
-        try:
-            cagr = _compute_holding_cagr(holding, market_value)
-        except Exception:
-            cagr = None
-    # Never show N/A: if a true money-weighted CAGR can't be determined (new
-    # position under the minimum window, cash/bond with no BUY/SELL ledger rows,
-    # etc.) fall back to the position's simple total return.
-    if cagr is None:
-        cagr = round(unrealized_pl_pct, 4)
+    min_cagr_days = int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365))
+    first_date = holding.first_purchased_at
+    if cost_basis > 0 and market_value >= 0 and first_date is not None:
+        age_days = (
+            _to_naive_utc(datetime.now(timezone.utc)) - _to_naive_utc(first_date)
+        ).days
+        if age_days >= min_cagr_days:
+            try:
+                cagr = _compute_holding_cagr(holding, market_value)
+            except Exception:
+                cagr = None
+            if cagr is None:
+                cagr = round(unrealized_pl_pct, 4)
 
     return {
         "id": holding.id,
@@ -400,12 +402,20 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
         except Exception:
             pass
 
-    # Never leave these metrics blank. When a full money-weighted calc or a
-    # benchmark comparison isn't possible (empty portfolio, no benchmark window,
-    # offline, etc.) fall back to the portfolio's simple return and a neutral 0
-    # excess-return so the dashboard never shows N/A.
-    if xirr is None:
+    # Annualizing a sub-one-year investment window is meaningless (a tiny 2-week
+    # gain extrapolates to millions of %), so suppress XIRR until the portfolio's
+    # money has been at work for at least a full year. The frontend then hides
+    # the "Annualized Return" card instead of showing an absurd figure.
+    min_xirr_days = int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365))
+    if d0 is not None and (
+        _to_naive_utc(datetime.now(timezone.utc)) - _to_naive_utc(d0)
+    ).days < min_xirr_days:
+        xirr = None
+    elif xirr is None:
+        # Never leave the metric blank: fall back to the portfolio's simple
+        # return (only reached for year+ windows that still lack cash flows).
         xirr = round(profit_loss_percentage, 4)
+
     if alpha is None:
         alpha = 0.0
 

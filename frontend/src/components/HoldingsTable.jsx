@@ -137,7 +137,7 @@ export function HoldingsTable({
                           {isCagrGain ? '+' : ''}{h.cagr.toFixed(2)}%
                         </div>
                       ) : (
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>N/A</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }} title="Hold for 1+ years to see an annualized return">&mdash;</span>
                       )}
                     </td>
                     <td>
