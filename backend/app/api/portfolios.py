@@ -12,6 +12,11 @@ from app.services.market_price_service import (
     get_market_price_service,
 )
 
+BOND_SUGGESTION_SYMBOLS = {
+    'BND', 'TLT', 'IEF', 'SHY', 'AGG', 'LQD', 'HYG', 'MUB', 'TIP', 'VGLT', 'BNDX', 'SCHO', 'US10Y-2030'
+}
+CASH_SUGGESTION_SYMBOLS = {'USD-CASH'}
+
 bp = Blueprint("portfolios", __name__, url_prefix="/api/portfolios")
 
 
@@ -26,7 +31,7 @@ def _get_price_for_holding(holding, override_prices=None):
     purchase_price = float(holding.avg_cost)
     if override_prices is not None and symbol in override_prices:
         return float(override_prices[symbol])
-    if security_type in ("CASH", "BOND"):
+    if security_type in ("CASH"):
         return purchase_price
     try:
         return float(_price_service().get_current_price(symbol))
@@ -43,7 +48,7 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
 
     if override_prices is not None and symbol in override_prices:
         raw_current_price = float(override_prices[symbol])
-    elif security_type in ("CASH", "BOND"):
+    elif security_type in ("CASH"):
         raw_current_price = raw_purchase_price
     else:
         try:
@@ -514,10 +519,16 @@ def _get_or_create_security(symbol):
             "sector": quote.get("sector"),
         }
 
+    security_type = "STOCK"
+    if symbol in CASH_SUGGESTION_SYMBOLS:
+        security_type = "CASH"
+    elif symbol in BOND_SUGGESTION_SYMBOLS:
+        security_type = "BOND"
+
     security = Security(
         symbol=symbol,
         name=info.get("name"),
-        type="STOCK",
+        type=security_type,
         exchange=info.get("exchange"),
         currency=info.get("currency") or "USD",
         sector=info.get("sector"),
@@ -752,7 +763,7 @@ def get_portfolio_chart_data(portfolio_id):
 
     series = []
     for holding in portfolio.holdings:
-        if holding.security.type in {"CASH", "BOND"}:
+        if holding.security.type in {"CASH"}:
             continue
         points = market_price_service.collect_and_store_price_series(
             holding.security.symbol,
@@ -783,7 +794,7 @@ def refresh_portfolio_prices(portfolio_id):
         requested_symbols = [
             holding.security.symbol
             for holding in portfolio.holdings
-            if holding.security.type not in {"CASH", "BOND"}
+            if holding.security.type not in {"CASH"}
         ]
 
     override_prices = {}
@@ -811,7 +822,7 @@ def refresh_portfolio_prices(portfolio_id):
             security.currency = quote.get("currency") or "USD"
             security.sector = quote.get("sector") or security.sector
 
-        if security.type not in {"CASH", "BOND"}:
+        if security.type not in {"CASH"}:
             price = float(quote["price"])
             override_prices[symbol] = price
             updated_symbols.append(symbol)
@@ -892,7 +903,7 @@ def portfolio_what_if(portfolio_id):
         else:
             for holding in portfolio.holdings:
                 symbol = holding.security.symbol
-                if holding.security.type in {"CASH", "BOND"}:
+                if holding.security.type in {"CASH"}:
                     override_prices[symbol] = float(holding.avg_cost)
                     continue
                 try:
