@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, ArrowUpRight, ArrowDownRight, Plus, Trash2, ShoppingCart, DollarSign } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 export function HoldingsTable({
   holdings = [],
@@ -9,6 +10,7 @@ export function HoldingsTable({
   onOpenAddModal,
   onOpenCashModal,
 }) {
+  const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredHoldings = holdings.filter(
@@ -29,13 +31,20 @@ export function HoldingsTable({
   return (
     <div className="card">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <div style={{ fontWeight: '700', fontSize: '1.15rem', color: 'var(--text-primary)' }}>
-            Portfolio Holdings
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div>
+            <div style={{ fontWeight: '700', fontSize: '1.15rem', color: 'var(--text-primary)' }}>
+              Portfolio Holdings
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Active securities and asset positions
+            </div>
           </div>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Active securities and asset positions
-          </div>
+          {isBrainrot && (
+            <div className="brainrot-side-gif holdings">
+              <img src="/brainrot/securities-holdings-scuba.gif" alt="Holdings explorer" />
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
