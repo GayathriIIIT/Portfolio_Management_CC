@@ -12,6 +12,11 @@ from app.services.market_price_service import (
     get_market_price_service,
 )
 
+BOND_SUGGESTION_SYMBOLS = {
+    'BND', 'TLT', 'IEF', 'SHY', 'AGG', 'LQD', 'HYG', 'MUB', 'TIP', 'VGLT', 'BNDX', 'SCHO', 'US10Y-2030'
+}
+CASH_SUGGESTION_SYMBOLS = {'USD-CASH'}
+
 bp = Blueprint("portfolios", __name__, url_prefix="/api/portfolios")
 
 
@@ -514,10 +519,16 @@ def _get_or_create_security(symbol):
             "sector": quote.get("sector"),
         }
 
+    security_type = "STOCK"
+    if symbol in CASH_SUGGESTION_SYMBOLS:
+        security_type = "CASH"
+    elif symbol in BOND_SUGGESTION_SYMBOLS:
+        security_type = "BOND"
+
     security = Security(
         symbol=symbol,
         name=info.get("name"),
-        type="STOCK",
+        type=security_type,
         exchange=info.get("exchange"),
         currency=info.get("currency") or "USD",
         sector=info.get("sector"),

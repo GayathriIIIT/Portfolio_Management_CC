@@ -85,7 +85,7 @@ export function AddHoldingModal({ isOpen, onClose, portfolioId, onSuccess }) {
             <TickerAutocomplete
               value={symbol}
               onChange={setSymbol}
-              placeholder="e.g. AAPL, MSFT, BOND-US10Y"
+              placeholder="e.g. AAPL, TLT, BND, USD-CASH"
               required={true}
             />
           </div>
