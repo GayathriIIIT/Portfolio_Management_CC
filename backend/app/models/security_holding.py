@@ -14,5 +14,7 @@ class SecurityHolding(db.Model):
     security_id = db.Column(db.BigInteger, db.ForeignKey("security.id"), nullable=False)
     quantity = db.Column(db.Numeric(18, 4), nullable=False)
     avg_cost = db.Column(db.Numeric(18, 4), nullable=False)
+    first_purchased_at = db.Column(db.DateTime, nullable=True)
 
     security = db.relationship("Security")
+

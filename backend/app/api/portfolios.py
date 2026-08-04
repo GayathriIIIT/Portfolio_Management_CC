@@ -61,6 +61,35 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
     unrealized_pl = market_value - cost_basis
     unrealized_pl_pct = (unrealized_pl / cost_basis * 100) if cost_basis else 0.0
 
+    # Self-healing first_purchased_at
+    if holding.first_purchased_at is None:
+        try:
+            first_txn = PortfolioTransaction.query.filter_by(
+                portfolio_id=holding.portfolio_id, security_id=holding.security_id
+            ).order_by(PortfolioTransaction.executed_at.asc()).first()
+            if first_txn:
+                holding.first_purchased_at = first_txn.executed_at
+            else:
+                holding.first_purchased_at = holding.portfolio.created_at or datetime.now(timezone.utc)
+            db.session.add(holding)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    # Annualized return (CAGR) of the position.
+    # NOTE: the old formula `(market_value / cost_basis) ** (1 / years) - 1`
+    # divided today's *blended* weighted-average cost (which includes shares
+    # bought later at different dates) by the holding period of only the *first*
+    # purchase. Mixing those two clocks makes the number wrong whenever a
+    # position was averaged-up/down. We now solve the money-weighted IRR (XIRR)
+    # of the security's actual BUY/SELL cash flows instead.
+    cagr = None
+    if cost_basis > 0 and market_value >= 0:
+        try:
+            cagr = _compute_holding_cagr(holding, market_value)
+        except Exception:
+            cagr = None
+
     return {
         "id": holding.id,
         "symbol": symbol,
@@ -78,7 +107,197 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
         "cost_basis": cost_basis,
         "unrealized_pl": unrealized_pl,
         "unrealized_pl_pct": unrealized_pl_pct,
+        "first_purchased_at": holding.first_purchased_at.isoformat() if holding.first_purchased_at else None,
+        "cagr": cagr,
     }
+
+
+def _to_naive_utc(d):
+    """Normalize any date/datetime to a naive UTC datetime for safe arithmetic."""
+    import datetime as _dt
+    if isinstance(d, _dt.datetime):
+        if d.tzinfo is not None:
+            # Convert to UTC then strip tzinfo
+            d = d.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        return d
+    if isinstance(d, _dt.date):
+        return _dt.datetime(d.year, d.month, d.day, 0, 0, 0)
+    raise TypeError(f"Expected date or datetime, got {type(d)}")
+
+
+def _compute_holding_cagr(holding, market_value):
+    """Money-weighted annualized return (CAGR) of a single position.
+
+    Returns a percentage (e.g. 12.34 means 12.34%/yr) or ``None`` when it cannot
+    be determined. It solves the IRR (XIRR) of the security's real BUY/SELL cash
+    flows plus today's market value, so later purchases at different prices/dates
+    are correctly weighted instead of being folded into one blended cost basis.
+
+    The window is measured from the first transaction to now and the result is
+    annualized; if the position was held for less than a configured minimum
+    number of days, ``None`` is returned so a sub-year gain isn't shown as an
+    implausibly large annualized figure.
+    """
+    min_days = int(current_app.config.get("MIN_CAGR_HOLDING_DAYS", 30))
+
+    txns = (
+        PortfolioTransaction.query.filter_by(
+            portfolio_id=holding.portfolio_id, security_id=holding.security_id
+        )
+        .order_by(PortfolioTransaction.executed_at.asc())
+        .all()
+    )
+
+    sec_curr = holding.security.currency or "USD"
+    base_curr = holding.portfolio.base_currency or "USD"
+    fx_rate = _price_service().get_fx_rate(sec_curr, base_curr)
+
+    cash_flows = []
+    for t in txns:
+        if t.txn_type not in ("BUY", "SELL"):
+            continue
+        dt = _to_naive_utc(t.executed_at)
+        qty = float(t.quantity)
+        fees = float(t.fees or 0.0)
+        if t.txn_type == "BUY":
+            cash_flows.append((dt, -(qty * float(t.price) + fees) * fx_rate))
+        else:
+            proceeds = (qty * float(t.price) - fees) * fx_rate
+            if proceeds > 0:
+                cash_flows.append((dt, proceeds))
+
+    if not cash_flows:
+        return None
+
+    d0 = cash_flows[0][0]
+    holding_days = (datetime.now(timezone.utc).replace(tzinfo=None) - d0).days
+    if holding_days < min_days:
+        return None
+
+    cash_flows.append((datetime.now(timezone.utc), market_value))
+
+    invested = sum(-amt for _, amt in cash_flows if amt < 0)
+    simple_return_pct = 0.0
+    if invested > 0:
+        proceeds = sum(amt for _, amt in cash_flows if amt > 0)
+        simple_return_pct = ((market_value + proceeds - invested) / invested) * 100.0
+    return _solve_xirr(cash_flows, simple_return_pct)
+
+
+def _solve_xirr(cash_flows, simple_return_pct=0.0):
+    cf = [(_to_naive_utc(d), float(a)) for d, a in cash_flows if a != 0]
+    if not cf:
+        return None
+
+    has_pos = any(a > 0 for _, a in cf)
+    has_neg = any(a < 0 for _, a in cf)
+    if not (has_pos and has_neg):
+        return None
+
+    cf.sort(key=lambda x: x[0])
+    d0 = cf[0][0]
+
+    total_days = (cf[-1][0] - d0).days
+    if total_days == 0:
+        return simple_return_pct
+
+    def get_years(d):
+        return (d - d0).days / 365.0
+
+    years_cf = [(get_years(d), a) for d, a in cf]
+
+    def f(r):
+        val = 0.0
+        for t, a in years_cf:
+            try:
+                if 1.0 + r <= 0:
+                    val += a * (1.0 + r) ** (-t) if t >= 0 else a
+                else:
+                    val += a / ((1.0 + r) ** t)
+            except (ZeroDivisionError, OverflowError):
+                val += float('inf')
+        return val
+
+    r0 = 0.1
+    r1 = 0.2
+    f0 = f(r0)
+    f1 = f(r1)
+
+    for _ in range(100):
+        if abs(f1 - f0) < 1e-12:
+            break
+        r_next = r1 - f1 * (r1 - r0) / (f1 - f0)
+        if abs(r_next) > 10.0:
+            r_next = 0.5 if r_next > 0 else -0.5
+        r0, r1 = r1, r_next
+        f0 = f1
+        f1 = f(r1)
+        if abs(f1) < 1e-6:
+            return round(r1 * 100.0, 4)
+
+    low = -0.99
+    high = 10.0
+    f_low = f(low)
+    f_high = f(high)
+
+    if f_low * f_high > 0:
+        return round(r1 * 100.0, 4) if abs(f1) < 0.1 else None
+
+    for _ in range(50):
+        mid = (low + high) / 2.0
+        f_mid = f(mid)
+        if abs(f_mid) < 1e-6:
+            return round(mid * 100.0, 4)
+        if f_low * f_mid < 0:
+            high = mid
+            f_high = f_mid
+        else:
+            low = mid
+            f_low = f_mid
+
+    return round(((low + high) / 2.0) * 100.0, 4)
+
+
+def _calculate_alpha_vs_benchmark(d0, portfolio_return_pct, benchmark_sym="SPY"):
+    if d0 is None:
+        return None
+
+    # Never hit the network during tests (which mock yfinance only for the price
+    # service); alpha stays None and the test suite remains hermetic/fast.
+    if current_app.config.get("TESTING"):
+        return None
+
+    import yfinance as yf
+    try:
+        d0_naive = _to_naive_utc(d0)
+        today_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        # yfinance caps history at a fixed window; cap 5 years so an old holding
+        # doesn't request data the API refuses. Aligning the benchmark window to
+        # the portfolio's actual start date keeps both returns over the same span.
+        lookback_start = max(d0_naive, today_naive - timedelta(days=365 * 5))
+        start_str = lookback_start.strftime("%Y-%m-%d")
+        today_str = today_naive.strftime("%Y-%m-%d")
+        ticker = yf.Ticker(benchmark_sym)
+        hist = ticker.history(start=start_str, end=today_str)
+        if hist.empty or len(hist) < 2:
+            return None
+
+        # Find benchmark return from d0 onwards
+        # Align to the closest trading day on or after d0
+        hist.index = hist.index.tz_localize(None) if hist.index.tz is not None else hist.index
+        future_rows = hist[hist.index >= d0_naive]
+        if future_rows.empty:
+            future_rows = hist  # fallback: use full range
+
+        first_price = float(future_rows.iloc[0]["Close"])
+        last_price = float(hist.iloc[-1]["Close"])
+        if first_price > 0:
+            bench_return = ((last_price - first_price) / first_price) * 100.0
+            alpha = portfolio_return_pct - bench_return
+            return round(alpha, 4)
+    except Exception:
+        pass
+    return None
 
 
 def _compute_portfolio_metrics(portfolio, override_prices=None):
@@ -96,6 +315,65 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
     profit_loss = current_value - invested_value
     profit_loss_percentage = (profit_loss / invested_value * 100) if invested_value else 0.0
 
+    # Calculate XIRR and Benchmark Alpha
+    xirr = None
+    alpha = None
+    txns = PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id).order_by(PortfolioTransaction.executed_at.asc()).all()
+    
+    if txns:
+        has_external_cashflow = any(t.txn_type in ("DEPOSIT", "WITHDRAW") for t in txns)
+        cash_flows = []
+        d0 = None
+        
+        if has_external_cashflow:
+            for t in txns:
+                if t.txn_type in ("DEPOSIT", "WITHDRAW"):
+                    dt = t.executed_at
+                    if d0 is None or _to_naive_utc(dt) < _to_naive_utc(d0):
+                        d0 = dt
+                    
+                    sec_curr = t.security.currency or "USD"
+                    fx_rate = _price_service().get_fx_rate(sec_curr, base_curr)
+                    amount = float(t.quantity) * fx_rate
+                    
+                    if t.txn_type == "DEPOSIT":
+                        cash_flows.append((dt, -amount))
+                    else:
+                        cash_flows.append((dt, amount))
+            if d0 is not None:
+                cash_flows.append((datetime.now(timezone.utc), current_value))
+        else:
+            for t in txns:
+                if t.txn_type in ("BUY", "SELL"):
+                    dt = t.executed_at
+                    if d0 is None or _to_naive_utc(dt) < _to_naive_utc(d0):
+                        d0 = dt
+                    
+                    sec_curr = t.security.currency or "USD"
+                    fx_rate = _price_service().get_fx_rate(sec_curr, base_curr)
+                    trade_value = (float(t.quantity) * float(t.price) + float(t.fees or 0)) * fx_rate
+                    
+                    if t.txn_type == "BUY":
+                        cash_flows.append((dt, -trade_value))
+                    else:
+                        proceeds = (float(t.quantity) * float(t.price) - float(t.fees or 0)) * fx_rate
+                        cash_flows.append((dt, proceeds))
+            if d0 is not None:
+                total_stock_value = 0.0
+                for holding in portfolio.holdings:
+                    if holding.security.type != "CASH":
+                        h_serialized = next((x for x in holdings if x["id"] == holding.id), None)
+                        if h_serialized:
+                            total_stock_value += h_serialized["market_value"]
+                cash_flows.append((datetime.now(timezone.utc), total_stock_value))
+
+        if cash_flows:
+            try:
+                xirr = _solve_xirr(cash_flows, profit_loss_percentage)
+                alpha = _calculate_alpha_vs_benchmark(d0, profit_loss_percentage, "SPY")
+            except Exception:
+                pass
+
     return {
         "portfolio_id": portfolio.id,
         "base_currency": base_curr,
@@ -103,6 +381,8 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
         "current_value": current_value,
         "profit_loss": profit_loss,
         "profit_loss_percentage": profit_loss_percentage,
+        "xirr": xirr,
+        "alpha": alpha,
         "holdings": holdings,
     }
 
@@ -709,6 +989,7 @@ def add_holding(portfolio_id):
             security_id=security.id,
             quantity=quantity,
             avg_cost=purchase_price,
+            first_purchased_at=datetime.now(timezone.utc),
         )
         db.session.add(holding)
     else:
@@ -719,6 +1000,20 @@ def add_holding(portfolio_id):
             (existing_qty * existing_cost) + (quantity * purchase_price)
         ) / total_qty
         holding.quantity = total_qty
+
+    # Record the purchase in the ledger too, so transaction history and the
+    # portfolio-level XIRR / per-holding CAGR stay consistent with "Add Position".
+    db.session.add(
+        PortfolioTransaction(
+            portfolio_id=portfolio.id,
+            security_id=security.id,
+            txn_type="BUY",
+            quantity=quantity,
+            price=purchase_price,
+            fees=0.0,
+            executed_at=datetime.now(timezone.utc),
+        )
+    )
 
     db.session.commit()
     return jsonify(_serialize_holding(holding)), 201
@@ -770,12 +1065,15 @@ def buy_holding(portfolio_id):
         portfolio_id=portfolio.id, security_id=security.id
     ).first()
 
+    executed_at = datetime.now(timezone.utc)
+
     if holding is None:
         holding = SecurityHolding(
             portfolio_id=portfolio.id,
             security_id=security.id,
             quantity=quantity,
             avg_cost=price,
+            first_purchased_at=executed_at,
         )
         db.session.add(holding)
     else:
@@ -792,7 +1090,7 @@ def buy_holding(portfolio_id):
         quantity=quantity,
         price=price,
         fees=fees,
-        executed_at=datetime.now(timezone.utc),
+        executed_at=executed_at,
     )
     db.session.add(transaction)
     db.session.commit()

@@ -99,12 +99,14 @@ export function HoldingsTable({
                 <th style={{ textAlign: 'right' }}>Live Price</th>
                 <th style={{ textAlign: 'right' }}>Market Value</th>
                 <th style={{ textAlign: 'right' }}>Unrealized P&L</th>
+                <th style={{ textAlign: 'right' }}>CAGR</th>
                 <th style={{ textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredHoldings.map((h) => {
                 const isGain = (h.unrealized_pl || 0) >= 0;
+                const isCagrGain = (h.cagr || 0) >= 0;
                 return (
                   <tr key={h.id}>
                     <td>
@@ -128,6 +130,15 @@ export function HoldingsTable({
                         {isGain ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
                         <span>{(h.unrealized_pl_pct || 0).toFixed(2)}%</span>
                       </div>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {h.cagr != null ? (
+                        <div className={isCagrGain ? 'text-positive' : 'text-negative'} style={{ fontWeight: '700' }}>
+                          {isCagrGain ? '+' : ''}{h.cagr.toFixed(2)}%
+                        </div>
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>N/A</span>
+                      )}
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>

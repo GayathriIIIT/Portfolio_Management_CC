@@ -59,6 +59,7 @@ CREATE TABLE security_holding (
     security_id   BIGINT        NOT NULL,                       -- FK to security regardless of type
     quantity      NUMERIC(18,4) NOT NULL,                       -- shares / face-value units / cash units
     avg_cost      NUMERIC(18,4) NOT NULL,                       -- weighted avg cost basis per unit
+    first_purchased_at TIMESTAMP NULL,                         -- timestamp of first purchase/buy
     CONSTRAINT fk_hold_portfolio
         FOREIGN KEY (portfolio_id) REFERENCES portfolio(id) ON DELETE CASCADE,
     CONSTRAINT fk_hold_security
