@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
+import { useTheme } from '../context/ThemeContext';
+import { useBrainrotToast } from '../context/BrainrotToastContext';
 
 export function TradePage({ portfolio, onTradeSuccess }) {
+  const { isBrainrot } = useTheme();
+  const { showToast } = useBrainrotToast();
   const [symbol, setSymbol] = useState('');
   const [txnType, setTxnType] = useState('BUY');
   const [quantity, setQuantity] = useState(1);
@@ -117,6 +121,12 @@ export function TradePage({ portfolio, onTradeSuccess }) {
       }
 
       setSuccessMsg(`${txnType} trade executed successfully!`);
+      if (isBrainrot) {
+        showToast(
+          txnType === 'BUY' ? 'buy-dance.gif' : 'sell-dance.gif',
+          txnType === 'BUY' ? `${sym} BOUGHT! LETS GOOO!` : `${sym} SOLD! MONEY IN POCKET!`
+        );
+      }
       setSymbol('');
       setQuantity(1);
       setPrice('');

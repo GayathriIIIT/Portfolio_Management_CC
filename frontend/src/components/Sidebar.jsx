@@ -6,7 +6,10 @@ import {
   FlaskConical,
   FolderCog,
   Compass,
+  Sun,
+  Moon,
 } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -18,6 +21,8 @@ const NAV_ITEMS = [
 ];
 
 export function Sidebar({ activeTab, setActiveTab, activePortfolio }) {
+  const { isDark, toggleColorScheme } = useTheme();
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -25,10 +30,18 @@ export function Sidebar({ activeTab, setActiveTab, activePortfolio }) {
           <Compass size={22} style={{ color: '#ffffff' }} />
         </div>
         <div>
-          <div className="brand-title" style={{ letterSpacing: '-0.03em', fontWeight: '800' }}>AlphaInsight</div>
+          <div className="brand-title" style={{ letterSpacing: '-0.03em', fontWeight: '800' }}>MoneyMaxxing</div>
           <div style={{ fontSize: '0.725rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
             Wealth Laboratory
           </div>
+          <button
+            className="scheme-toggle-btn"
+            onClick={toggleColorScheme}
+            title={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`}
+          >
+            {isDark ? <Sun size={13} /> : <Moon size={13} />}
+            <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>
+          </button>
         </div>
       </div>
 

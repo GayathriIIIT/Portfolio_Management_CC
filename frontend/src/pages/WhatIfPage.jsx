@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Calendar, Plus, X } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
+import { useTheme } from '../context/ThemeContext';
 
 export function WhatIfPage({ portfolio }) {
+  const { isBrainrot } = useTheme();
   const [scenarioName, setScenarioName] = useState('Tech crash');
   
   // Tabs: 'portfolio' (current holdings) or 'sandbox' (custom basket) - default to standalone sandbox
@@ -433,7 +435,7 @@ export function WhatIfPage({ portfolio }) {
                   backgroundColor: 'var(--accent-light)',
                   padding: '16px',
                   borderRadius: 'var(--radius-md)',
-                  border: '1px solid rgba(79, 70, 229, 0.2)',
+                  border: '1px solid var(--accent-border)',
                   marginBottom: '20px',
                 }}
               >
@@ -509,6 +511,14 @@ export function WhatIfPage({ portfolio }) {
                   </tbody>
                 </table>
               </div>
+              {isBrainrot && (
+                <div className={`brainrot-side-gif whatif ${simulationResult.profit_loss >= 0 ? 'profit' : 'loss'}`} style={{ marginTop: '16px' }}>
+                  <img
+                    src={simulationResult.profit_loss >= 0 ? '/brainrot/what-if-profit-67meme.gif' : '/brainrot/FAHH-what-if-loss.gif'}
+                    alt={simulationResult.profit_loss >= 0 ? 'Simulation in profit' : 'Simulation in loss'}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>

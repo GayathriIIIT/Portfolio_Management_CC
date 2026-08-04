@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTheme } from '../context/ThemeContext';
-import { Sun, Moon, RefreshCw, Plus, Wallet } from 'lucide-react';
+import { Briefcase, Sparkles, RefreshCw, Plus, Wallet } from 'lucide-react';
 
 export function Header({
   portfolios,
@@ -51,17 +51,17 @@ export function Header({
         <button
           className="theme-toggle-btn"
           onClick={toggleTheme}
-          title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+          title={`Switch to ${theme === 'professional' ? 'Brainrot' : 'Professional'} Mode`}
         >
-          {theme === 'light' ? (
+          {theme === 'professional' ? (
             <>
-              <Moon size={16} />
-              <span>Dark Mode</span>
+              <Sparkles size={16} />
+              <span>Brainrot Mode</span>
             </>
           ) : (
             <>
-              <Sun size={16} />
-              <span>Light Mode</span>
+              <Briefcase size={16} />
+              <span>Professional Mode</span>
             </>
           )}
         </button>

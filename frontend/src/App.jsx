@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ThemeProvider } from './context/ThemeContext';
+import { BrainrotToastProvider } from './context/BrainrotToastContext';
 import { api } from './services/api';
 
 import { Sidebar } from './components/Sidebar';
@@ -227,7 +228,9 @@ export function AppContent() {
 export function App() {
   return (
     <ThemeProvider>
-      <AppContent />
+      <BrainrotToastProvider>
+        <AppContent />
+      </BrainrotToastProvider>
     </ThemeProvider>
   );
 }
