@@ -115,53 +115,72 @@ export function PerformanceChart({ portfolioId }) {
   const activeSeries = seriesList.find((s) => s.symbol === selectedSymbol);
   const benchPoints = benchmarkData?.points || [];
 
-  // Build a timestamp-keyed map for O(1) benchmark lookup
-  const benchByTimestamp = {};
-  benchPoints.forEach((b) => {
-    if (b.timestamp) benchByTimestamp[b.timestamp] = b;
-  });
-
   // Determine if the range has sub-daily intervals (1d = 5m, 7d = 30m, 1m = 1h)
   const isIntraday = ['1d', '7d', '1m'].includes(range);
 
-  const formatXLabel = (isoTimestamp) => {
-    if (!isoTimestamp || !isoTimestamp.includes('T')) return isoTimestamp || 'N/A';
-    const [datePart, timePart] = isoTimestamp.split('T');
+  const labelForValue = (v) => {
+    let iso;
+    if (typeof v === 'number') iso = new Date(v).toISOString();
+    else iso = String(v);
+    if (!iso || !iso.includes('T')) return iso || 'N/A';
+    const d = new Date(iso);
     if (isIntraday) {
       // Show HH:MM in local time
       try {
-        const d = new Date(isoTimestamp);
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       } catch (_) {
-        return timePart ? timePart.substring(0, 5) : datePart;
+        return iso.split('T')[1] ? iso.split('T')[1].substring(0, 5) : iso.split('T')[0];
       }
     }
     // Multi-day: show MMM DD
     try {
-      const d = new Date(datePart + 'T00:00:00');
       return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     } catch (_) {
-      return datePart;
+      return iso.split('T')[0];
     }
   };
 
+  // Benchmark points sorted ascending by timestamp so each asset point can be
+  // aligned to the correct benchmark reading (forward-filled, not by array
+  // index — index alignment is what made the tooltip "loop through a set of dates").
+  const sortedBench = [...benchPoints].sort((a, b) =>
+    a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0
+  );
+  const benchBefore = (ts) => {
+    if (!sortedBench.length || !ts) return null;
+    let lo = 0;
+    let hi = sortedBench.length - 1;
+    let ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (sortedBench[mid].timestamp <= ts) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return ans >= 0 ? sortedBench[ans] : null;
+  };
+
   const chartData = activeSeries
-    ? (activeSeries.points || []).map((pt, idx) => {
-        const rawTimestamp = pt.timestamp || pt.as_of || '';
-        const label = formatXLabel(rawTimestamp);
+    ? (activeSeries.points || [])
+        .map((pt) => {
+          const rawTimestamp = pt.timestamp || pt.as_of || '';
+          const time = rawTimestamp ? new Date(rawTimestamp).getTime() : NaN;
+          const benchPt = benchBefore(rawTimestamp);
 
-        // Look up benchmark by exact timestamp first, then by array index
-        const benchPt = benchByTimestamp[rawTimestamp] || benchPoints[idx] || null;
-
-        return {
-          date: label,
-          rawTimestamp,
-          price: Number(pt.price || 0),
-          symbol: selectedSymbol,
-          benchmarkReturn: benchPt != null ? Number(benchPt.pct_return) : undefined,
-          benchmarkName: benchmarkData?.name || benchmark,
-        };
-      })
+          return {
+            date: labelForValue(rawTimestamp),
+            rawTimestamp,
+            time,
+            price: Number(pt.price || 0),
+            symbol: selectedSymbol,
+            benchmarkReturn: benchPt && benchPt.pct_return != null ? Number(benchPt.pct_return) : undefined,
+            benchmarkName: benchmarkData?.name || benchmark,
+          };
+        })
+        .filter((d) => Number.isFinite(d.time))
     : [];
 
   return (
@@ -268,12 +287,15 @@ export function PerformanceChart({ portfolioId }) {
             <LineChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
               <XAxis
-                dataKey="rawTimestamp"
+                dataKey="time"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
                 stroke="var(--text-secondary)"
                 fontSize={12}
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(ts) => formatXLabel(ts)}
+                tickFormatter={(v) => labelForValue(v)}
               />
               <YAxis
                 yAxisId="left"

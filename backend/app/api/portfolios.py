@@ -1011,11 +1011,22 @@ def get_portfolio_risk(portfolio_id):
     since = request.args.get("since", "").strip().lower()
     start_date = None
     if since == "last":
+        # Anchor the window on the most recent BUY/SELL (not a later
+        # DEPOSIT/WITHDRAW), so the view measures pure price movement after the
+        # last trade. A deposit made after the last trade would otherwise pin the
+        # window to today's date and yield no usable data.
         last_dt = (
             PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
+            .filter(PortfolioTransaction.txn_type.in_(("BUY", "SELL")))
             .order_by(PortfolioTransaction.executed_at.desc())
             .first()
         )
+        if last_dt is None:
+            last_dt = (
+                PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
+                .order_by(PortfolioTransaction.executed_at.desc())
+                .first()
+            )
         if last_dt is not None:
             start_date = _to_naive_utc(last_dt.executed_at).date()
             lookback_days = None  # ignore the range selector; show since the last trade

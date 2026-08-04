@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getRecentTickers } from '../services/tickerCache';
+import { getRecentTickers, rememberTicker } from '../services/tickerCache';
 
 export const POPULAR_SUGGESTIONS = [
   { symbol: 'AAPL', name: 'Apple Inc.' },
@@ -91,6 +91,12 @@ export function TickerAutocomplete({ value, onChange, placeholder, style, classN
             <div
               key={item.symbol}
               onClick={() => {
+                // Remember the symbol the user actually typed (e.g. "AA"), not
+                // just the resolved suggestion (e.g. "AAPL"), so re-entering
+                // "AA" surfaces "AA" in the recent-ticker cache too.
+                if (value && value.toUpperCase().trim() !== item.symbol.toUpperCase()) {
+                  rememberTicker(value.toUpperCase().trim());
+                }
                 onChange(item.symbol);
                 setShowSuggestions(false);
               }}

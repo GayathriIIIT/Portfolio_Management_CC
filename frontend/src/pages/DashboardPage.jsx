@@ -50,6 +50,7 @@ export function DashboardPage({
         onOpenTradeModal={onOpenTradeModal}
         onDeleteHolding={onDeleteHolding}
         onOpenCashModal={onOpenCashModal}
+        showBuyPosition={false}
       />
     </div>
   );

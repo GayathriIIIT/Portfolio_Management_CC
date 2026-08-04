@@ -9,6 +9,7 @@ export function HoldingsTable({
   onOpenTradeModal,
   onDeleteHolding,
   onOpenCashModal,
+  showBuyPosition = true,
 }) {
   const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
@@ -152,15 +153,17 @@ export function HoldingsTable({
                             <span>Analytics</span>
                           </button>
                         )}
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px' }}
-                          onClick={() => onOpenTradeModal('BUY', h.symbol)}
-                          title="Buy more"
-                        >
-                          <Plus size={12} />
-                          <span>Buy</span>
-                        </button>
+                        {showBuyPosition && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '4px 8px' }}
+                            onClick={() => onOpenTradeModal('BUY', h.symbol)}
+                            title="Buy more"
+                          >
+                            <Plus size={12} />
+                            <span>Buy</span>
+                          </button>
+                        )}
                         <button
                           className="btn btn-secondary btn-sm"
                           style={{ padding: '4px 8px' }}
