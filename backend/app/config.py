@@ -11,6 +11,8 @@ class Config:
     # Only annualize returns once a position/portfolio has been invested for at
     # least this many days; extrapolating a sub-year gain is meaningless.
     MIN_XIRR_HOLDING_DAYS = int(os.environ.get("MIN_XIRR_HOLDING_DAYS", "365"))
+    # Risk-free rate (annualized, percent) used in Sharpe / Sortino / Jensen's alpha.
+    RISK_FREE_RATE = float(os.environ.get("RISK_FREE_RATE", "4.0"))
 
 
 class TestConfig(Config):
