@@ -41,6 +41,11 @@ export const api = {
   getPortfolioAnalytics: (id) => request(`${API_BASE}/${id}/analytics`),
   getPortfolioChartData: (id, range = '1m', benchmark = 'SPY') =>
     request(`${API_BASE}/${id}/analytics/chart?range=${range}&benchmark=${encodeURIComponent(benchmark)}`),
+  getPortfolioRisk: (id, range = 'all', since = '') => {
+    const params = new URLSearchParams({ range });
+    if (since) params.set('since', since);
+    return request(`${API_BASE}/${id}/analytics/risk?${params.toString()}`);
+  },
   refreshPortfolioPrices: (id, payload = {}) => request(`${API_BASE}/${id}/refresh-prices`, { method: 'POST', body: payload }),
 
   // Holdings
@@ -65,4 +70,8 @@ export const api = {
 
   // Real-time market quote lookup
   getRealtimeQuote: (symbol) => request(`${API_BASE}/market_price/realtime?symbol=${encodeURIComponent(symbol)}`),
+
+  // Per-security analytics (risk metrics + recommendation over a window)
+  getStockAnalytics: (symbol, range = '1y') =>
+    request(`${API_BASE}/market_price/analytics?symbol=${encodeURIComponent(symbol)}&range=${range}`),
 };

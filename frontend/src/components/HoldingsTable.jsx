@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
-import { Search, ArrowUpRight, ArrowDownRight, Plus, Trash2, ShoppingCart, DollarSign } from 'lucide-react';
+import { Search, ArrowUpRight, ArrowDownRight, Plus, Trash2, ShoppingCart, DollarSign, Activity, X } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { HoldingAnalyticsPanel } from './HoldingAnalyticsPanel';
 
 export function HoldingsTable({
   holdings = [],
   currency = 'USD',
   onOpenTradeModal,
   onDeleteHolding,
-  onOpenAddModal,
   onOpenCashModal,
 }) {
   const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
+  const [expandedSymbol, setExpandedSymbol] = useState(null);
 
   const filteredHoldings = holdings.filter(
     (h) =>
@@ -74,18 +75,13 @@ export function HoldingsTable({
             <DollarSign size={14} />
             <span>Manage Cash</span>
           </button>
-
-          <button className="btn btn-primary btn-sm" onClick={onOpenAddModal}>
-            <Plus size={14} />
-            <span>Add Position</span>
-          </button>
         </div>
       </div>
 
       {!filteredHoldings.length ? (
         <div className="empty-state">
           <DollarSign className="empty-state-icon" />
-          <div>No holdings found in this portfolio. Click "Add Position" or "Trade" to get started.</div>
+          <div>No holdings found in this portfolio. Head to the Trade page to buy a position.</div>
         </div>
       ) : (
         <div className="table-container">
@@ -107,8 +103,11 @@ export function HoldingsTable({
               {filteredHoldings.map((h) => {
                 const isGain = (h.unrealized_pl || 0) >= 0;
                 const isCagrGain = (h.cagr || 0) >= 0;
+                const isCash = String(h.symbol || '').toUpperCase().endsWith('-CASH');
+                const isExpanded = expandedSymbol === h.id;
                 return (
-                  <tr key={h.id}>
+                  <React.Fragment key={h.id}>
+                    <tr>
                     <td>
                       <div style={{ fontWeight: '700', fontSize: '0.95rem' }}>{h.symbol}</div>
                       <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>{h.name || 'N/A'}</div>
@@ -141,7 +140,18 @@ export function HoldingsTable({
                       )}
                     </td>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        {!isCash && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '4px 8px' }}
+                            onClick={() => setExpandedSymbol(isExpanded ? null : h.id)}
+                            title="Show risk analytics for this security"
+                          >
+                            {isExpanded ? <X size={12} /> : <Activity size={12} />}
+                            <span>Analytics</span>
+                          </button>
+                        )}
                         <button
                           className="btn btn-secondary btn-sm"
                           style={{ padding: '4px 8px' }}
@@ -171,6 +181,17 @@ export function HoldingsTable({
                       </div>
                     </td>
                   </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={9} style={{ padding: 0, border: 'none' }}>
+                        <HoldingAnalyticsPanel
+                          symbol={h.symbol}
+                          onClose={() => setExpandedSymbol(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

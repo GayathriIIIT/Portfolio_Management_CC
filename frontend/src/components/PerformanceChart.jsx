@@ -268,11 +268,12 @@ export function PerformanceChart({ portfolioId }) {
             <LineChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
               <XAxis
-                dataKey="date"
+                dataKey="rawTimestamp"
                 stroke="var(--text-secondary)"
                 fontSize={12}
                 tickLine={false}
                 axisLine={false}
+                tickFormatter={(ts) => formatXLabel(ts)}
               />
               <YAxis
                 yAxisId="left"
@@ -302,8 +303,8 @@ export function PerformanceChart({ portfolioId }) {
                 dataKey="price"
                 stroke="var(--accent-primary)"
                 strokeWidth={2.5}
-                dot={{ r: 3, fill: 'var(--accent-primary)' }}
-                activeDot={{ r: 6, stroke: 'var(--bg-card)', strokeWidth: 2 }}
+                dot={false}
+                activeDot={{ r: 5, stroke: 'var(--bg-card)', strokeWidth: 2 }}
               />
               {benchmark !== 'NONE' && (
                 <Line
@@ -313,8 +314,8 @@ export function PerformanceChart({ portfolioId }) {
                   stroke="#f59e0b"
                   strokeWidth={2}
                   strokeDasharray="4 4"
-                  dot={{ r: 3, fill: '#f59e0b' }}
-                  activeDot={{ r: 6, fill: '#f59e0b', stroke: 'var(--bg-card)', strokeWidth: 2 }}
+                  dot={false}
+                  activeDot={{ r: 5, fill: '#f59e0b', stroke: 'var(--bg-card)', strokeWidth: 2 }}
                 />
               )}
             </LineChart>

@@ -6,7 +6,6 @@ export function HoldingsPage({
   analytics,
   onOpenTradeModal,
   onDeleteHolding,
-  onOpenAddModal,
   onOpenCashModal,
 }) {
   if (!portfolio) {
@@ -29,7 +28,6 @@ export function HoldingsPage({
         currency={portfolio.base_currency}
         onOpenTradeModal={onOpenTradeModal}
         onDeleteHolding={onDeleteHolding}
-        onOpenAddModal={onOpenAddModal}
         onOpenCashModal={onOpenCashModal}
       />
     </div>

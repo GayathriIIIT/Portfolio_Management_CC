@@ -109,7 +109,9 @@ export function TransactionsPage({ portfolio }) {
               <tbody>
                 {filtered.map((t) => {
                   const isBuy = t.type === 'BUY' || t.type === 'DEPOSIT';
-                  const total = (t.quantity || 0) * (t.price || 0) + (t.fees || 0);
+                  const gross = (t.quantity || 0) * (t.price || 0);
+                  // SELL/WITHDRAW: the fee reduces the amount received.
+                  const total = isBuy ? gross + (t.fees || 0) : gross - (t.fees || 0);
 
                   return (
                     <tr key={t.id}>

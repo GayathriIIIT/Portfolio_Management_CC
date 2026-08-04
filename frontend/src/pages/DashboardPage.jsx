@@ -2,6 +2,7 @@ import React from 'react';
 import { KPICards } from '../components/KPICards';
 import { PerformanceChart } from '../components/PerformanceChart';
 import { AssetAllocationChart } from '../components/AssetAllocationChart';
+import { RiskPerformanceCard } from '../components/RiskPerformanceCard';
 import { HoldingsTable } from '../components/HoldingsTable';
 
 export function DashboardPage({
@@ -9,7 +10,6 @@ export function DashboardPage({
   analytics,
   onOpenTradeModal,
   onDeleteHolding,
-  onOpenAddModal,
   onOpenCashModal,
 }) {
   if (!portfolio) {
@@ -34,6 +34,9 @@ export function DashboardPage({
       {/* KPI Cards */}
       <KPICards analytics={analytics} currency={portfolio.base_currency} />
 
+      {/* Risk & Performance */}
+      <RiskPerformanceCard portfolioId={portfolio.id} />
+
       {/* Charts Grid */}
       <div className="grid-2">
         <PerformanceChart portfolioId={portfolio.id} />
@@ -46,7 +49,6 @@ export function DashboardPage({
         currency={portfolio.base_currency}
         onOpenTradeModal={onOpenTradeModal}
         onDeleteHolding={onDeleteHolding}
-        onOpenAddModal={onOpenAddModal}
         onOpenCashModal={onOpenCashModal}
       />
     </div>
