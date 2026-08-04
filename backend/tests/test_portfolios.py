@@ -102,9 +102,10 @@ def test_analytics_xirr_annualizes_when_held_over_a_year(client):
     body = client.get(f"/api/portfolios/{created['id']}/analytics").get_json()
     # 1500 invested 2y ago is worth 1900 now -> sqrt(1900/1500) - 1 per year.
     assert body["xirr"] == 12.5463
-    # Alpha falls back to a neutral 0.0 in tests: TESTING mode skips the live
-    # benchmark fetch, and the metric is never allowed to be N/A.
-    assert body["alpha"] == 0.0
+    # Alpha stays null when it can't be measured: TESTING mode skips the live
+    # benchmark fetch, and the frontend renders null as "N/A" rather than
+    # misreporting a forced 0.0 as a real alpha.
+    assert body["alpha"] is None
 
 
 def test_analytics_xirr_hidden_when_under_a_year(client):

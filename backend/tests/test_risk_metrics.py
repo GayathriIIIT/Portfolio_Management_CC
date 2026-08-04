@@ -1,0 +1,253 @@
+import pytest
+
+from app.services.risk_metrics import compute_risk_metrics
+from app.api import portfolios as portfolios_module
+from app.extensions import db
+from app.models import Portfolio, PortfolioTransaction
+
+
+def nav_from_returns(returns, start=100.0):
+    nav = [start]
+    for r in returns:
+        nav.append(nav[-1] * (1.0 + r))
+    return nav
+
+
+def _create_portfolio(client, owner="Risk", name="Test"):
+    return client.post("/api/portfolios", json={"owner": owner, "name": name})
+
+
+def test_short_window_only_reports_stable_metrics():
+    nav = nav_from_returns([0.01] * 40)
+    m = compute_risk_metrics(nav, rf_pct=4.0)
+    assert m["sufficient_history"] is False
+    assert m["period_days"] == 40
+    assert m["total_return"] is not None  # always available
+    assert m["max_drawdown"] == 0.0
+    assert m["best_day"] == 1.0
+    assert m["worst_day"] == 1.0
+    assert m["period_volatility"] == 0.0
+    # The entire annualized family is gated below one year
+    assert m["annualized_return"] is None
+    assert m["annualized_volatility"] is None
+    assert m["sharpe_ratio"] is None
+    assert m["sortino_ratio"] is None
+    assert m["jensen_alpha"] is None
+
+
+def test_short_window_does_not_extrapolate_huge_returns():
+    # A 2-day 21% bounce must NOT surface as a +207% annualized number.
+    nav = [100.0, 110.0, 121.0]
+    m = compute_risk_metrics(nav, rf_pct=4.0)
+    assert m["sufficient_history"] is False
+    assert m["total_return"] == pytest.approx(21.0)
+    assert m["annualized_return"] is None
+    assert m["annualized_volatility"] is None
+
+
+def test_annualized_family_active_after_one_year():
+    pattern = [0.01, -0.005, 0.008, -0.003, 0.0]
+    nav = nav_from_returns(pattern * 100)  # 500 days
+    m = compute_risk_metrics(nav, rf_pct=4.0)
+    assert m["sufficient_history"] is True
+    assert m["annualized_return"] is not None
+    assert m["annualized_volatility"] is not None and m["annualized_volatility"] > 0
+    assert m["sharpe_ratio"] is not None
+    assert m["sortino_ratio"] is not None
+
+
+def test_year_window_zero_variance_has_no_sharpe():
+    nav = nav_from_returns([0.01] * 400)
+    m = compute_risk_metrics(nav, rf_pct=4.0)
+    assert m["sufficient_history"] is True
+    assert m["annualized_return"] is not None
+    assert m["annualized_volatility"] == 0.0
+    assert m["sharpe_ratio"] is None
+    assert m["sortino_ratio"] is None
+
+
+def test_max_drawdown_peak_to_trough():
+    nav = [100.0, 120.0, 100.0, 120.0]
+    m = compute_risk_metrics(nav)
+    assert m["max_drawdown"] == pytest.approx(16.6667, abs=0.0001)
+    assert m["best_day"] == 20.0
+    assert m["worst_day"] == pytest.approx(-16.6667, abs=0.01)
+
+
+def test_benchmark_stats_need_observations():
+    nav = nav_from_returns([0.01] * 10)
+    bench = [0.01] * 10
+    m = compute_risk_metrics(nav, bench_returns=bench)
+    # fewer than the 30-observation minimum -> hidden, not absurd
+    assert m["beta"] is None
+    assert m["correlation"] is None
+    assert m["up_capture"] is None
+    assert m["down_capture"] is None
+
+
+def test_beta_correlation_with_matching_benchmark():
+    pattern = [0.01, -0.005, 0.008, 0.0]
+    nav = nav_from_returns(pattern * 100)
+    m = compute_risk_metrics(nav, bench_returns=(pattern * 100), rf_pct=4.0)
+    assert m["beta"] == pytest.approx(1.0, abs=1e-3)
+    assert m["correlation"] == pytest.approx(1.0, abs=1e-3)
+    assert m["up_capture"] == pytest.approx(100.0, abs=1e-3)
+    assert m["down_capture"] == pytest.approx(100.0, abs=1e-3)
+    assert m["jensen_alpha"] is not None
+
+
+def test_inverse_benchmark_gives_negative_beta():
+    pattern = [0.01, -0.005, 0.008, 0.0]
+    nav = nav_from_returns(pattern * 40)
+    bench = [-x for x in pattern] * 40
+    m = compute_risk_metrics(nav, bench_returns=bench, rf_pct=4.0)
+    assert m["beta"] == pytest.approx(-1.0, abs=1e-3)
+    assert m["correlation"] == pytest.approx(-1.0, abs=1e-3)
+    assert m["up_capture"] == pytest.approx(-100.0, abs=1e-3)
+    assert m["down_capture"] == pytest.approx(-100.0, abs=1e-3)
+
+
+def test_sparse_input_returns_none_metrics():
+    m = compute_risk_metrics([100.0])
+    assert m["data_points"] == 1
+    assert m["period_days"] == 0
+    assert m["annualized_return"] is None
+    assert m["annualized_volatility"] is None
+    assert m["beta"] is None
+    assert m["best_day"] is None
+    assert m["worst_day"] is None
+
+
+def test_reconstructed_nav_healthy_for_unfunded_buy(client, monkeypatch):
+    """A BUY with no DEPOSIT row must not produce ~0 NAV (which would make the
+    next day's return +10000%). The opening cash is seeded from the purchase
+    cost, so the series stays at a real valuation."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Nav"}).get_json()
+    pid = created["id"]
+    client.post(
+        f"/api/portfolios/{pid}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
+    db.session.commit()
+
+    today = _date.today()
+    closes = {(today - _td(days=i)): 100.0 + i * 0.5 for i in range(21)}
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+
+    portfolio = Portfolio.query.get(pid)
+    nav, d0, _flows = portfolios_module._reconstruct_nav_series(portfolio)
+    assert nav and len(nav) >= 2
+    values = [p["value"] for p in nav]
+    assert all(v > 0 for v in values)
+
+    returns = []
+    for prev, cur in zip(values, values[1:]):
+        if prev and prev > 0:
+            returns.append((cur - prev) / prev * 100.0)
+    assert max(abs(r) for r in returns) < 10.0
+
+
+def test_risk_endpoint_smoke_testing_guard(client):
+    created = _create_portfolio(client).get_json()
+    resp = client.get(f"/api/portfolios/{created['id']}/analytics/risk")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["portfolio_id"] == created["id"]
+    assert body["metrics"] is None
+    assert body["nav"] == []
+    assert body["benchmark"] == "SPY"
+
+
+def test_twr_removes_deposit_inflation_from_total_return():
+    """A mid-window deposit must NOT surface as a gain in the total return.
+
+    NAV grows 1000 -> 1100 (10%), then a $1000 deposit arrives (jump to 2100),
+    then the tree grows 5% to 2205. The naive last/first return reads +120.5%
+    (the deposit masquerading as profit); the Time-Weighted Return must be the
+    honest 10% * 5% = +15.5%.
+    """
+    nav_values = [1000.0, 1100.0, 2100.0, 2205.0]
+    flows = [0.0, 0.0, 1000.0, 0.0]
+
+    naive = compute_risk_metrics(nav_values)
+    twr = compute_risk_metrics(nav_values, external_flows=flows)
+
+    assert naive["total_return"] == pytest.approx(120.5, abs=1e-3)
+    assert twr["total_return"] == pytest.approx(15.5, abs=1e-3)
+    # The deposit day must not be counted as a "best day".
+    assert naive["best_day"] == pytest.approx(90.9091, abs=1e-3)
+    assert twr["best_day"] == pytest.approx(10.0, abs=1e-3)
+
+
+def test_nav_since_last_transaction_tracks_price_movement(client, monkeypatch):
+    """Window starting at the last transaction holds no trades, so the return is
+    pure price movement instead of an inflated buy/deposit-driven number."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Since"}).get_json()
+    pid = created["id"]
+    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post(
+        f"/api/portfolios/{pid}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    today = _date.today()
+    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
+    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
+    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # last trade
+    db.session.commit()
+
+    closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}  # rising to today
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+
+    portfolio = Portfolio.query.get(pid)
+    last_date = today - _td(days=10)
+    nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio, start_date=last_date)
+    assert nav and len(nav) >= 2
+
+    window_first = nav[0]["value"]
+    window_last = nav[-1]["value"]
+    ret = (window_last / window_first - 1.0) * 100.0
+    price_ret = (closes[today] / closes[last_date] - 1.0) * 100.0
+    assert ret == pytest.approx(price_ret, abs=0.001)
+
+
+def test_nav_with_cash_equals_kpi_current_value(client, monkeypatch):
+    """Including cash in the NAV makes the series' latest point equal the live
+    Portfolio Value KPI (this requires the cash-adjusted buy path, which real
+    trades use)."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Nav"}).get_json()
+    pid = created["id"]
+    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "AAPL", "quantity": 10, "price": 100.0})
+
+    today = _date.today()
+    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
+    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
+    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # buy
+    db.session.commit()
+
+    # Today's close matches the live AAPL price (190) so the NAV's last point
+    # equals what the /analytics KPI reports.
+    closes = {(today - _td(days=i)): 190.0 - i * 0.5 for i in range(31)}
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+
+    kpi_value = client.get(f"/api/portfolios/{pid}/analytics").get_json()["current_value"]
+    portfolio = Portfolio.query.get(pid)
+    nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio)
+    assert nav
+    assert nav[-1]["value"] == pytest.approx(kpi_value, abs=0.01)
