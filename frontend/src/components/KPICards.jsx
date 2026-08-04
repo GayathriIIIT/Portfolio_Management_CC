@@ -1,11 +1,24 @@
 import React from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Layers, PieChart } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Layers, PieChart, Award, Zap } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 export function KPICards({ analytics, currency = 'USD' }) {
+  const { isBrainrot } = useTheme();
   if (!analytics) return null;
 
-  const { invested_value = 0, current_value = 0, profit_loss = 0, profit_loss_percentage = 0, holdings = [] } = analytics;
+  const {
+    invested_value = 0,
+    current_value = 0,
+    profit_loss = 0,
+    profit_loss_percentage = 0,
+    xirr = null,
+    alpha = null,
+    holdings = []
+  } = analytics;
+  
   const isPositive = profit_loss >= 0;
+  const isXirrPositive = xirr >= 0;
+  const isAlphaPositive = alpha >= 0;
 
   const formatCurrency = (val) => {
     return new Intl.NumberFormat('en-US', {
@@ -17,7 +30,8 @@ export function KPICards({ analytics, currency = 'USD' }) {
   };
 
   return (
-    <div className="grid-4">
+    <div className="kpi-wrap">
+    <div className="grid-4" style={{ marginBottom: '28px' }}>
       {/* 1. Total Portfolio Value */}
       <div className="card kpi-card">
         <div className="kpi-header">
@@ -73,10 +87,60 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
         <div className="kpi-subtext">
           <span className={`badge ${isPositive ? 'badge-success' : 'badge-danger'}`}>
-            {isPositive ? '▲' : '▼'} {Math.abs(profit_loss_percentage).toFixed(2)}% Overall
+            {isPositive ? '▲' : '▼'}             {Math.abs(profit_loss_percentage).toFixed(2)}% Overall
           </span>
         </div>
       </div>
+
+      {/* 5. Annualized Return (XIRR) - hidden until the portfolio has been
+          invested for at least a year; annualizing a shorter window is
+          meaningless (it can show absurd figures like millions of %). */}
+      {xirr != null && (
+        <div className="card kpi-card">
+          <div className="kpi-header">
+            <span>Annualized Return (XIRR)</span>
+            <Award size={18} style={{ color: '#8b5cf6' }} />
+          </div>
+          <div className={`kpi-value ${isXirrPositive ? 'text-positive' : 'text-negative'}`}>
+            {`${isXirrPositive ? '+' : ''}${xirr.toFixed(2)}%`}
+          </div>
+          <div className="kpi-subtext" style={{ color: 'var(--text-secondary)' }}>
+            <span className={`badge ${isXirrPositive ? 'badge-success' : 'badge-danger'}`}>
+              IRR
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Benchmark Alpha (vs SPY) */}
+      <div className="card kpi-card">
+        <div className="kpi-header">
+          <span>Benchmark Alpha (vs SPY)</span>
+          <Zap size={18} style={{ color: '#f59e0b' }} />
+        </div>
+        <div className={`kpi-value ${alpha != null ? (isAlphaPositive ? 'text-positive' : 'text-negative') : ''}`}>
+          {alpha != null ? `${isAlphaPositive ? '+' : ''}${alpha.toFixed(2)}%` : 'N/A'}
+        </div>
+        <div className="kpi-subtext" style={{ color: 'var(--text-secondary)' }}>
+          {alpha != null ? (
+            <span className={`badge ${isAlphaPositive ? 'badge-success' : 'badge-danger'}`}>
+              {isAlphaPositive ? 'Outperforming' : 'Underperforming'}
+            </span>
+          ) : (
+            'No benchmark comparison'
+          )}
+        </div>
+      </div>
+    </div>
+    {isBrainrot && (
+      <div className={`brainrot-side-gif ${isPositive ? 'profit' : 'loss'}`}>
+        <img
+          src={isPositive ? '/brainrot/happy-cat.gif' : '/brainrot/crying-hamster.gif'}
+          alt={isPositive ? 'Portfolio in profit' : 'Portfolio in loss'}
+        />
+        <span>{isPositive ? 'WE ARE IN PROFIT, CHAT!' : 'WE ARE IN LOSS, CHAT!'}</span>
+      </div>
+    )}
     </div>
   );
 }

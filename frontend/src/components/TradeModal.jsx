@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { X, ArrowLeftRight, Search, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from './TickerAutocomplete';
+import { useTheme } from '../context/ThemeContext';
+import { useBrainrotToast } from '../context/BrainrotToastContext';
 
 export function TradeModal({
   isOpen,
@@ -22,6 +24,9 @@ export function TradeModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+
+  const { isBrainrot } = useTheme();
+  const { showToast } = useBrainrotToast();
 
   useEffect(() => {
     if (isOpen) {
@@ -101,6 +106,12 @@ export function TradeModal({
       }
 
       setSuccessMsg(`${txnType} order executed successfully!`);
+      if (isBrainrot) {
+        showToast(
+          txnType === 'BUY' ? 'buy-dance.gif' : 'sell-dance.gif',
+          txnType === 'BUY' ? `${sym} BOUGHT! LETS GOOO!` : `${sym} SOLD! MONEY IN POCKET!`
+        );
+      }
       setTimeout(() => {
         onTradeSuccess();
         onClose();

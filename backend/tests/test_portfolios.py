@@ -1,8 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.api import portfolios as portfolios_module
 from app.extensions import db
-from app.models import MarketPrice, Security, WhatifPrice
+from app.models import MarketPrice, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
 from app.services import market_price_service as mps_module
 
 
@@ -81,6 +81,46 @@ def test_get_portfolio_analytics(client):
     assert body["current_value"] == 1900.0
     assert body["profit_loss"] == 900.0
     assert body["profit_loss_percentage"] == 90.0
+
+
+def test_analytics_xirr_annualizes_when_held_over_a_year(client):
+    """Portfolios holding positions without ledger rows (legacy data) get a
+    money-weighted annualized return once the position has been held for at
+    least a year (extrapolating a sub-year window is meaningless)."""
+    created = _create_portfolio(client).get_json()
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 150.0},
+    )
+    # add_holding writes a BUY row; simulate pre-fix data by removing it and
+    # back-dating the holding two years so annualization is meaningful.
+    db.session.query(PortfolioTransaction).delete()
+    holding = SecurityHolding.query.filter_by(portfolio_id=created["id"]).first()
+    holding.first_purchased_at = datetime.now(timezone.utc) - timedelta(days=730)
+    db.session.commit()
+
+    body = client.get(f"/api/portfolios/{created['id']}/analytics").get_json()
+    # 1500 invested 2y ago is worth 1900 now -> sqrt(1900/1500) - 1 per year.
+    assert body["xirr"] == 12.5463
+    # Alpha falls back to a neutral 0.0 in tests: TESTING mode skips the live
+    # benchmark fetch, and the metric is never allowed to be N/A.
+    assert body["alpha"] == 0.0
+
+
+def test_analytics_xirr_hidden_when_under_a_year(client):
+    """A portfolio whose money has been invested for under a year must not show
+    an annualized XIRR: the extrapolation is meaningless (a 2-week loss would
+    read as ~-94% "annualized"). The metric is suppressed instead, along with
+    per-holding CAGR for the still-young position."""
+    created = _create_portfolio(client).get_json()
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 1, "purchase_price": 200.0},
+    )
+    body = client.get(f"/api/portfolios/{created['id']}/analytics").get_json()
+    assert body["xirr"] is None
+    assert body["profit_loss_percentage"] < 0
+    assert body["holdings"][0]["cagr"] is None
 
 
 def test_refresh_portfolio_prices_returns_live_quotes_without_persisting(client):

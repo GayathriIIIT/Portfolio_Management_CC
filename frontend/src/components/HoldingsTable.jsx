@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, ArrowUpRight, ArrowDownRight, Plus, Trash2, ShoppingCart, DollarSign } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 export function HoldingsTable({
   holdings = [],
@@ -9,6 +10,7 @@ export function HoldingsTable({
   onOpenAddModal,
   onOpenCashModal,
 }) {
+  const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredHoldings = holdings.filter(
@@ -29,13 +31,20 @@ export function HoldingsTable({
   return (
     <div className="card">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <div style={{ fontWeight: '700', fontSize: '1.15rem', color: 'var(--text-primary)' }}>
-            Portfolio Holdings
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div>
+            <div style={{ fontWeight: '700', fontSize: '1.15rem', color: 'var(--text-primary)' }}>
+              Portfolio Holdings
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Active securities and asset positions
+            </div>
           </div>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Active securities and asset positions
-          </div>
+          {isBrainrot && (
+            <div className="brainrot-side-gif holdings">
+              <img src="/brainrot/securities-holdings-scuba.gif" alt="Holdings explorer" />
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -90,12 +99,14 @@ export function HoldingsTable({
                 <th style={{ textAlign: 'right' }}>Live Price</th>
                 <th style={{ textAlign: 'right' }}>Market Value</th>
                 <th style={{ textAlign: 'right' }}>Unrealized P&L</th>
+                <th style={{ textAlign: 'right' }}>CAGR</th>
                 <th style={{ textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredHoldings.map((h) => {
                 const isGain = (h.unrealized_pl || 0) >= 0;
+                const isCagrGain = (h.cagr || 0) >= 0;
                 return (
                   <tr key={h.id}>
                     <td>
@@ -119,6 +130,15 @@ export function HoldingsTable({
                         {isGain ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
                         <span>{(h.unrealized_pl_pct || 0).toFixed(2)}%</span>
                       </div>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {h.cagr != null ? (
+                        <div className={isCagrGain ? 'text-positive' : 'text-negative'} style={{ fontWeight: '700' }}>
+                          {isCagrGain ? '+' : ''}{h.cagr.toFixed(2)}%
+                        </div>
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }} title="Hold for 1+ years to see an annualized return">&mdash;</span>
+                      )}
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
