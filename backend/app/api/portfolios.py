@@ -89,6 +89,11 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
             cagr = _compute_holding_cagr(holding, market_value)
         except Exception:
             cagr = None
+    # Never show N/A: if a true money-weighted CAGR can't be determined (new
+    # position under the minimum window, cash/bond with no BUY/SELL ledger rows,
+    # etc.) fall back to the position's simple total return.
+    if cagr is None:
+        cagr = round(unrealized_pl_pct, 4)
 
     return {
         "id": holding.id,
@@ -198,8 +203,8 @@ def _solve_xirr(cash_flows, simple_return_pct=0.0):
     d0 = cf[0][0]
 
     total_days = (cf[-1][0] - d0).days
-    if total_days == 0:
-        return simple_return_pct
+    if total_days <= 0:
+        return round(simple_return_pct, 4)
 
     def get_years(d):
         return (d - d0).days / 365.0
@@ -207,53 +212,45 @@ def _solve_xirr(cash_flows, simple_return_pct=0.0):
     years_cf = [(get_years(d), a) for d, a in cf]
 
     def f(r):
+        # r must stay above -100%: for r <= -1 the base 1+r is non-positive and
+        # raising it to a fractional power yields complex numbers (which used to
+        # crash the solver and silently push the metric onto the simple-return
+        # fallback, making "Annualized" identical to "Total Return").
+        base = 1.0 + r
+        if base <= 0.0:
+            return float("inf") if any(a > 0 for _, a in years_cf) else float("-inf")
         val = 0.0
         for t, a in years_cf:
-            try:
-                if 1.0 + r <= 0:
-                    val += a * (1.0 + r) ** (-t) if t >= 0 else a
-                else:
-                    val += a / ((1.0 + r) ** t)
-            except (ZeroDivisionError, OverflowError):
-                val += float('inf')
+            val += a / (base ** t)
         return val
 
-    r0 = 0.1
-    r1 = 0.2
-    f0 = f(r0)
-    f1 = f(r1)
-
-    for _ in range(100):
-        if abs(f1 - f0) < 1e-12:
-            break
-        r_next = r1 - f1 * (r1 - r0) / (f1 - f0)
-        if abs(r_next) > 10.0:
-            r_next = 0.5 if r_next > 0 else -0.5
-        r0, r1 = r1, r_next
-        f0 = f1
-        f1 = f(r1)
-        if abs(f1) < 1e-6:
-            return round(r1 * 100.0, 4)
-
-    low = -0.99
-    high = 10.0
+    # XIRR of a real (non-levered) portfolio always lies in (-100%, +inf):
+    # f -> +inf just above -100% (late positive cash flows dominate) and f -> the
+    # d0 outflow (< 0) as r -> +inf, so a sign change always exists. Pure
+    # bisection stays inside this domain and can never evaluate complex numbers.
+    low = -0.999999
+    high = 1.0
     f_low = f(low)
     f_high = f(high)
+    if not (f_low < 0 < f_high or f_high < 0 < f_low):
+        h = 2.0
+        f_h = f(h)
+        while not (f_low < 0 < f_h or f_h < 0 < f_low) and h < 1.0e9:
+            h *= 2.0
+            f_h = f(h)
+        high, f_high = h, f_h
+        if not (f_low < 0 < f_high or f_high < 0 < f_low):
+            return round(simple_return_pct, 4)
 
-    if f_low * f_high > 0:
-        return round(r1 * 100.0, 4) if abs(f1) < 0.1 else None
-
-    for _ in range(50):
+    for _ in range(200):
         mid = (low + high) / 2.0
         f_mid = f(mid)
-        if abs(f_mid) < 1e-6:
+        if abs(f_mid) < 1e-9:
             return round(mid * 100.0, 4)
-        if f_low * f_mid < 0:
-            high = mid
-            f_high = f_mid
+        if f_low < 0 < f_mid or f_mid < 0 < f_low:
+            high, f_high = mid, f_mid
         else:
-            low = mid
-            f_low = f_mid
+            low, f_low = mid, f_mid
 
     return round(((low + high) / 2.0) * 100.0, 4)
 
@@ -279,18 +276,21 @@ def _calculate_alpha_vs_benchmark(d0, portfolio_return_pct, benchmark_sym="SPY")
         today_str = today_naive.strftime("%Y-%m-%d")
         ticker = yf.Ticker(benchmark_sym)
         hist = ticker.history(start=start_str, end=today_str)
-        if hist.empty or len(hist) < 2:
+        if hist.empty or "Close" not in hist.columns or len(hist.dropna(subset=["Close"])) < 2:
             return None
 
-        # Find benchmark return from d0 onwards
-        # Align to the closest trading day on or after d0
+        # yfinance often returns a NaN close for the still-in-progress trading
+        # day (and sometimes other broken rows). Drop them before measuring the
+        # benchmark return, otherwise `first_price`/`last_price` become NaN and
+        # alpha is silently None or emits an invalid NaN into the JSON payload.
         hist.index = hist.index.tz_localize(None) if hist.index.tz is not None else hist.index
-        future_rows = hist[hist.index >= d0_naive]
-        if future_rows.empty:
-            future_rows = hist  # fallback: use full range
+        closes = hist["Close"].dropna()
+        closes = closes[closes.index >= d0_naive]
+        if len(closes) < 2:
+            return None
 
-        first_price = float(future_rows.iloc[0]["Close"])
-        last_price = float(hist.iloc[-1]["Close"])
+        first_price = float(closes.iloc[0])
+        last_price = float(closes.iloc[-1])
         if first_price > 0:
             bench_return = ((last_price - first_price) / first_price) * 100.0
             alpha = portfolio_return_pct - bench_return
@@ -319,23 +319,23 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
     xirr = None
     alpha = None
     txns = PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id).order_by(PortfolioTransaction.executed_at.asc()).all()
-    
+    cash_flows = []
+    d0 = None
+
     if txns:
         has_external_cashflow = any(t.txn_type in ("DEPOSIT", "WITHDRAW") for t in txns)
-        cash_flows = []
-        d0 = None
-        
+
         if has_external_cashflow:
             for t in txns:
                 if t.txn_type in ("DEPOSIT", "WITHDRAW"):
                     dt = t.executed_at
                     if d0 is None or _to_naive_utc(dt) < _to_naive_utc(d0):
                         d0 = dt
-                    
+
                     sec_curr = t.security.currency or "USD"
                     fx_rate = _price_service().get_fx_rate(sec_curr, base_curr)
                     amount = float(t.quantity) * fx_rate
-                    
+
                     if t.txn_type == "DEPOSIT":
                         cash_flows.append((dt, -amount))
                     else:
@@ -348,11 +348,11 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
                     dt = t.executed_at
                     if d0 is None or _to_naive_utc(dt) < _to_naive_utc(d0):
                         d0 = dt
-                    
+
                     sec_curr = t.security.currency or "USD"
                     fx_rate = _price_service().get_fx_rate(sec_curr, base_curr)
                     trade_value = (float(t.quantity) * float(t.price) + float(t.fees or 0)) * fx_rate
-                    
+
                     if t.txn_type == "BUY":
                         cash_flows.append((dt, -trade_value))
                     else:
@@ -367,12 +367,47 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
                             total_stock_value += h_serialized["market_value"]
                 cash_flows.append((datetime.now(timezone.utc), total_stock_value))
 
+    # Fallback for portfolios that hold positions but have no ledger rows yet
+    # (e.g. holdings created before BUY/SELL entries were recorded). We infer a
+    # money-weighted return by treating each position's cost basis as invested on
+    # its first-purchase date and the portfolio's current value as the terminal
+    # cash flow, so XIRR/Alpha aren't just blanked out to N/A.
+    if not cash_flows and holdings:
+        for serialized in holdings:
+            cost = float(serialized["cost_basis"])
+            if cost <= 0:
+                continue
+            holding = next(
+                (h for h in portfolio.holdings if h.id == serialized["id"] and h.security.type != "CASH"),
+                None,
+            )
+            if holding is None:
+                continue
+            start = holding.first_purchased_at or portfolio.created_at
+            if start is None:
+                continue
+            start = _to_naive_utc(start)
+            cash_flows.append((start, -cost))
+            if d0 is None or start < d0:
+                d0 = start
         if cash_flows:
-            try:
-                xirr = _solve_xirr(cash_flows, profit_loss_percentage)
-                alpha = _calculate_alpha_vs_benchmark(d0, profit_loss_percentage, "SPY")
-            except Exception:
-                pass
+            cash_flows.append((datetime.now(timezone.utc), current_value))
+
+    if cash_flows:
+        try:
+            xirr = _solve_xirr(cash_flows, profit_loss_percentage)
+            alpha = _calculate_alpha_vs_benchmark(d0, profit_loss_percentage, "SPY")
+        except Exception:
+            pass
+
+    # Never leave these metrics blank. When a full money-weighted calc or a
+    # benchmark comparison isn't possible (empty portfolio, no benchmark window,
+    # offline, etc.) fall back to the portfolio's simple return and a neutral 0
+    # excess-return so the dashboard never shows N/A.
+    if xirr is None:
+        xirr = round(profit_loss_percentage, 4)
+    if alpha is None:
+        alpha = 0.0
 
     return {
         "portfolio_id": portfolio.id,
