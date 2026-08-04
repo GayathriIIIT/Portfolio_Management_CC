@@ -1,5 +1,5 @@
 import React from 'react';
-import { DollarSign, TrendingUp, TrendingDown, Layers, PieChart, Award, Zap } from 'lucide-react';
+import { DollarSign, TrendingUp, TrendingDown, Layers, PieChart } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 export function KPICards({ analytics, currency = 'USD' }) {
@@ -15,7 +15,7 @@ export function KPICards({ analytics, currency = 'USD' }) {
     alpha = null,
     holdings = []
   } = analytics;
-
+  
   const isPositive = profit_loss >= 0;
   const isXirrPositive = xirr >= 0;
   const isAlphaPositive = alpha >= 0;
@@ -31,7 +31,7 @@ export function KPICards({ analytics, currency = 'USD' }) {
 
   return (
     <div className="kpi-wrap">
-      <div className="grid-4">
+    <div className="grid-4" style={{ marginBottom: '28px' }}>
       {/* 1. Total Portfolio Value */}
       <div className="card kpi-card">
         <div className="kpi-header">
@@ -91,6 +91,16 @@ export function KPICards({ analytics, currency = 'USD' }) {
           </span>
         </div>
       </div>
+      </div>
+      {isBrainrot && (
+        <div className={`brainrot-side-gif ${isPositive ? 'profit' : 'loss'}`}>
+          <img
+            src={isPositive ? '/brainrot/happy-cat.gif' : '/brainrot/crying-hamster.gif'}
+            alt={isPositive ? 'Portfolio in profit' : 'Portfolio in loss'}
+          />
+          <span>{isPositive ? 'WE ARE IN PROFIT, CHAT!' : 'WE ARE IN LOSS, CHAT!'}</span>
+        </div>
+      )}
 
       {/* 5. Annualized Return (XIRR) */}
       <div className="card kpi-card">
@@ -131,16 +141,6 @@ export function KPICards({ analytics, currency = 'USD' }) {
           )}
         </div>
       </div>
-      </div>
-      {isBrainrot && (
-        <div className={`brainrot-side-gif ${isPositive ? 'profit' : 'loss'}`}>
-          <img
-            src={isPositive ? '/brainrot/happy-cat.gif' : '/brainrot/crying-hamster.gif'}
-            alt={isPositive ? 'Portfolio in profit' : 'Portfolio in loss'}
-          />
-          <span>{isPositive ? 'WE ARE IN PROFIT, CHAT!' : 'WE ARE IN LOSS, CHAT!'}</span>
-        </div>
-      )}
     </div>
   );
 }
