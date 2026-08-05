@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ThemeProvider } from './context/ThemeContext';
 import { BrainrotToastProvider } from './context/BrainrotToastContext';
 import { api } from './services/api';
@@ -17,6 +17,9 @@ import { TradeModal } from './components/TradeModal';
 import { NewPortfolioModal } from './components/NewPortfolioModal';
 import { ManageCashModal } from './components/ManageCashModal';
 
+// How often the dashboard auto-refreshes live prices (2 minutes).
+const LIVE_REFRESH_MS = 2 * 60 * 1000;
+
 export function AppContent() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [portfolios, setPortfolios] = useState([]);
@@ -26,6 +29,9 @@ export function AppContent() {
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Guards the auto-refresh so overlapping live-price fetches never pile up.
+  const refreshInFlight = useRef(false);
 
   // Modals
   const [tradeModal, setTradeModal] = useState({ isOpen: false, type: 'BUY', symbol: '' });
@@ -75,7 +81,7 @@ export function AppContent() {
   }, [loadPortfolioData]);
 
   // Refresh live prices from Yahoo Finance
-  const handleRefreshPrices = async () => {
+  const handleRefreshPrices = useCallback(async () => {
     if (!selectedPortfolioId) return;
     setIsRefreshing(true);
     try {
@@ -90,7 +96,21 @@ export function AppContent() {
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [selectedPortfolioId, loadPortfolioData]);
+
+  // Auto-refresh live prices every 2 minutes on the main dashboard so the
+  // Portfolio Value KPI stays current without needing the manual button.
+  useEffect(() => {
+    if (activeTab !== 'dashboard' || !selectedPortfolioId) return;
+    const timer = setInterval(() => {
+      if (refreshInFlight.current) return;
+      refreshInFlight.current = true;
+      handleRefreshPrices().finally(() => {
+        refreshInFlight.current = false;
+      });
+    }, LIVE_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [activeTab, selectedPortfolioId, handleRefreshPrices]);
 
   const handleOpenTradeModal = (type = 'BUY', symbol = '') => {
     setTradeModal({ isOpen: true, type, symbol });
