@@ -30,7 +30,9 @@ export function Sidebar({ activeTab, setActiveTab, activePortfolio }) {
           <Compass size={22} style={{ color: '#ffffff' }} />
         </div>
         <div>
-          <div className="brand-title" style={{ letterSpacing: '-0.03em', fontWeight: '800' }}>MoneyMaxxing</div>
+          <div className="brand-title" style={{ letterSpacing: '-0.03em', fontWeight: '800' }}>
+            MoneyMaxxing
+          </div>
           <div style={{ fontSize: '0.725rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
             Wealth Laboratory
           </div>

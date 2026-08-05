@@ -1,14 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Receipt, Filter, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
+import { useTheme } from '../context/ThemeContext';
 
 export function TransactionsPage({ portfolio }) {
+  const { isBrainrot } = useTheme();
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('ALL');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    // Clear any ledger belonging to the previously selected portfolio so it can
+    // never be shown (or briefly linger) under the new portfolio.
+    setTransactions([]);
+    setError(null);
     if (portfolio?.id) {
       loadTransactions();
     }
@@ -16,15 +23,20 @@ export function TransactionsPage({ portfolio }) {
 
   const loadTransactions = async () => {
     if (!portfolio?.id) return;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await api.getTransactions(portfolio.id);
+      if (requestId !== requestIdRef.current) return; // stale response
       setTransactions(data);
     } catch (err) {
+      if (requestId !== requestIdRef.current) return; // stale response
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -53,7 +65,8 @@ export function TransactionsPage({ portfolio }) {
         </button>
       </div>
 
-      <div className="card">
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
+        <div className="card" style={{ flex: 1, minWidth: 0 }}>
         {/* Filters */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -145,6 +158,24 @@ export function TransactionsPage({ portfolio }) {
             </table>
           </div>
         )}
+      </div>
+
+      {isBrainrot && (
+        <div style={{ flex: 'none' }}>
+          <img
+            src="/brainrot/frog-dance-transaction-ledger.gif"
+            alt="Transaction ledger"
+            style={{
+              width: 300,
+              height: 500,
+              objectFit: 'cover',
+              borderRadius: 'var(--radius-md)',
+              border: '3px solid #ffffff',
+              boxShadow: 'var(--shadow-md)',
+            }}
+          />
+        </div>
+      )}
       </div>
     </div>
   );

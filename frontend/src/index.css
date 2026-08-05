@@ -674,6 +674,12 @@ body {
   box-shadow: 0 4px 14px rgba(236, 72, 153, 0.35);
 }
 
+[data-theme='brainrot'] .brand-title,
+[data-theme='brainrot-dark'] .brand-title {
+  color: #FE019A;
+  text-shadow: 0 0 8px rgba(254, 1, 154, 0.75), 0 0 20px rgba(254, 1, 154, 0.45);
+}
+
 [data-theme='brainrot'] .btn-primary,
 [data-theme='brainrot-dark'] .btn-primary {
   box-shadow: 0 3px 10px rgba(236, 72, 153, 0.3);
@@ -722,6 +728,15 @@ body {
   top: -22px;
   right: 0;
   z-index: 5;
+}
+
+/* Profit/Loss sticker anchored to the top of the Total Return box */
+.kpi-wrap .brainrot-side-gif.kpi-total-return {
+  top: -50px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .brainrot-side-gif.whatif {

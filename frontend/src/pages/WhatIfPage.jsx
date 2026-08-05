@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Calendar, Plus, X } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
@@ -48,6 +48,7 @@ export function WhatIfPage({ portfolio }) {
   const [savedEntries, setSavedEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const requestIdRef = useRef(0);
 
   // Sync sandbox basket to localStorage
   useEffect(() => {
@@ -60,6 +61,11 @@ export function WhatIfPage({ portfolio }) {
   }, [manualPrices]);
 
   useEffect(() => {
+    // Clear results belonging to the previously selected portfolio so a stale
+    // simulation / ledger can never be shown under the new portfolio.
+    setSimulationResult(null);
+    setSavedEntries([]);
+    setError(null);
     if (portfolio?.id) {
       loadSavedWhatIfs();
     }
@@ -67,8 +73,10 @@ export function WhatIfPage({ portfolio }) {
 
   const loadSavedWhatIfs = async () => {
     if (!portfolio?.id) return;
+    const requestId = ++requestIdRef.current;
     try {
       const data = await api.getWhatIfList(portfolio.id);
+      if (requestId !== requestIdRef.current) return; // stale response
       setSavedEntries(data);
     } catch (err) {
       console.error('Failed to load saved what-ifs', err);
@@ -425,8 +433,19 @@ export function WhatIfPage({ portfolio }) {
           </div>
 
           {!simulationResult ? (
-            <div className="empty-state">
-              Configure parameters on the left and run simulation to view stress-tested portfolio valuation.
+            <div>
+              <div className="empty-state">
+                Configure parameters on the left and run simulation to view stress-tested portfolio valuation.
+              </div>
+              {isBrainrot && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px' }}>
+                  <img
+                    src="/brainrot/hamster-what-if-simulation.gif"
+                    alt="No simulation results yet"
+                    style={{ width: 240, height: 240, objectFit: 'cover', borderRadius: '50%', border: '4px solid #ffffff', boxShadow: 'var(--shadow-md)' }}
+                  />
+                </div>
+              )}
             </div>
           ) : (
             <div>

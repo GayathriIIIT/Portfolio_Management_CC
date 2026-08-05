@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign, Activity } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
@@ -24,16 +24,28 @@ export function TradePage({ portfolio, onTradeSuccess }) {
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
   const [analyticsSymbol, setAnalyticsSymbol] = useState(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    // Clear portfolio-specific state so nothing from the previously selected
+    // portfolio lingers (recent trades, quote, FX rate, messages) while the new
+    // portfolio's data is loading.
+    setRecentTransactions([]);
+    setQuoteInfo(null);
+    setFxRate(1.0);
+    setSuccessMsg(null);
+    setError(null);
     if (portfolio?.id) {
       loadRecentTransactions();
     }
   }, [portfolio?.id]);
 
   const loadRecentTransactions = async () => {
+    if (!portfolio?.id) return;
+    const requestId = ++requestIdRef.current;
     try {
       const data = await api.getTransactions(portfolio.id);
+      if (requestId !== requestIdRef.current) return; // stale response
       setRecentTransactions(data.slice(0, 8)); // Top 8 recent trades
     } catch (err) {
       // Handle silently

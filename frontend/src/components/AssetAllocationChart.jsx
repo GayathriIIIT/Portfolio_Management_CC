@@ -1,10 +1,12 @@
 import React from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { PieChart as PieIcon } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 const COLORS = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
 export function AssetAllocationChart({ holdings = [] }) {
+  const { isBrainrot } = useTheme();
   if (!holdings || holdings.length === 0) {
     return (
       <div className="card">
@@ -68,7 +70,7 @@ export function AssetAllocationChart({ holdings = [] }) {
         <span>Asset Allocation</span>
       </div>
       {chartData.length > 0 ? (
-        <div style={{ width: '100%', height: 280 }}>
+        <div style={{ width: '100%', height: 280, position: 'relative' }}>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -92,6 +94,26 @@ export function AssetAllocationChart({ holdings = [] }) {
               />
             </PieChart>
           </ResponsiveContainer>
+          {isBrainrot && (
+            <img
+              src="/brainrot/asset_allocation.gif"
+              alt="Asset allocation"
+              style={{
+                position: 'absolute',
+                top: '42%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: 108,
+                height: 108,
+                objectFit: 'cover',
+                borderRadius: '50%',
+                border: '3px solid #ffffff',
+                boxShadow: 'var(--shadow-md)',
+                zIndex: 5,
+                pointerEvents: 'none',
+              }}
+            />
+          )}
         </div>
       ) : (
         <div className="empty-state">No investable securities to display allocation.</div>
