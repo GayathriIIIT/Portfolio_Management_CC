@@ -53,6 +53,7 @@ export function TradeModal({
     try {
       const res = await api.getRealtimeQuote(ticker.trim());
       setQuoteInfo(res);
+      rememberTicker(ticker.trim().toUpperCase(), res.name || '');
       if (res.price) {
         setPrice(res.price);
       }
@@ -107,7 +108,7 @@ export function TradeModal({
       }
 
       setSuccessMsg(`${txnType} order executed successfully!`);
-      rememberTicker(sym);
+      rememberTicker(sym, quoteInfo?.name || '');
       if (isBrainrot) {
         showToast(
           txnType === 'BUY' ? 'buy-dance.gif' : 'sell-dance.gif',
@@ -157,7 +158,12 @@ export function TradeModal({
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.preventDefault();
+          }}
+        >
           {/* Order Type Tabs */}
           <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
             <button

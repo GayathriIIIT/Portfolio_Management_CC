@@ -1,4 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 import { Activity, X } from 'lucide-react';
 import { api } from '../services/api';
 import { RecommendationBanner, MetricGrid } from './riskWidgets';
@@ -18,6 +27,7 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
   const [error, setError] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [recommendation, setRecommendation] = useState(null);
+  const [nav, setNav] = useState([]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -31,6 +41,7 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
         if (!isMounted) return;
         setMetrics(res.metrics || null);
         setRecommendation(res.recommendation || null);
+        setNav(res.nav || []);
       })
       .catch((err) => {
         if (isMounted) setError(err.message);
@@ -129,6 +140,77 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
       ) : (
         <>
           <RecommendationBanner recommendation={recommendation} />
+
+          {nav.length >= 2 && (
+            <div
+              style={{
+                backgroundColor: 'var(--bg-card)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                padding: '12px 16px',
+                marginBottom: '16px',
+              }}
+            >
+              <div style={{ fontWeight: '700', fontSize: '0.85rem', marginBottom: '8px' }}>
+                {symbol} — Price History ({range})
+              </div>
+              <div style={{ width: '100%', height: 240 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={nav.map((pt) => ({ date: pt.date, price: Number(pt.value) || 0 }))}
+                    margin={{ top: 5, right: 20, left: 10, bottom: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      stroke="var(--text-secondary)"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v) => {
+                        try {
+                          return new Date(v).toLocaleDateString([], { month: 'short', day: 'numeric' });
+                        } catch {
+                          return v;
+                        }
+                      }}
+                      minTickGap={32}
+                    />
+                    <YAxis
+                      stroke="var(--text-secondary)"
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v) => `$${v}`}
+                      domain={['auto', 'auto']}
+                      width={64}
+                    />
+                    <Tooltip
+                      labelFormatter={(label) =>
+                        new Date(label).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })
+                      }
+                      formatter={(value) => [`$${Number(value).toFixed(2)}`, 'Close']}
+                      contentStyle={{
+                        backgroundColor: 'var(--bg-card)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="price"
+                      stroke="var(--accent-primary)"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--bg-card)' }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
           <MetricGrid metrics={metrics} />
         </>
       )}

@@ -123,6 +123,7 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
     return {
         "id": holding.id,
         "symbol": symbol,
+        "type": security_type,
         "name": holding.security.name,
         "exchange": holding.security.exchange,
         "currency": sec_currency,
