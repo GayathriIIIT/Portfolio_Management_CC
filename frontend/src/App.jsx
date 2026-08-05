@@ -56,6 +56,7 @@ export function AppContent() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isNewPortfolioModalOpen, setIsNewPortfolioModalOpen] = useState(false);
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
+  const [cashModalAction, setCashModalAction] = useState('DEPOSIT');
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
 
   // Global wallet — user-level, shared across every portfolio. Fetched once and
@@ -279,8 +280,9 @@ export function AppContent() {
                       onOpenTradeModal={handleOpenTradeModal}
                       onDeleteHolding={handleDeleteHolding}
                       onOpenAddModal={() => setIsAddModalOpen(true)}
-                      onOpenCashModal={() => {
+                      onOpenCashModal={(action) => {
                         setIsWalletModalOpen(false);
+                        setCashModalAction(action || 'DEPOSIT');
                         setIsCashModalOpen(true);
                       }}
                     />
@@ -293,8 +295,9 @@ export function AppContent() {
                       onOpenTradeModal={handleOpenTradeModal}
                       onDeleteHolding={handleDeleteHolding}
                       onOpenAddModal={() => setIsAddModalOpen(true)}
-                      onOpenCashModal={() => {
+                      onOpenCashModal={(action) => {
                         setIsWalletModalOpen(false);
+                        setCashModalAction(action || 'DEPOSIT');
                         setIsCashModalOpen(true);
                       }}
                     />
@@ -352,6 +355,7 @@ export function AppContent() {
         onClose={() => setIsCashModalOpen(false)}
         portfolioId={selectedPortfolioId}
         baseCurrency={activePortfolio?.base_currency || 'USD'}
+        initialAction={cashModalAction}
         onSuccess={refreshPortfolioData}
       />
 

@@ -152,18 +152,28 @@ export function HoldingsTable({
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        {!isCash && (
+                        {isCash ? (
                           <button
-                            className="btn btn-secondary btn-sm"
+                            className="btn btn-secondary btn-sm text-negative"
                             style={{ padding: '4px 8px' }}
-                            onClick={() => setExpandedSymbol(isExpanded ? null : h.id)}
-                            title="Show risk analytics for this security"
+                            onClick={() => onOpenCashModal('WITHDRAW')}
+                            title="Move this portfolio cash out to your wallet"
                           >
-                            {isExpanded ? <X size={12} /> : <Activity size={12} />}
-                            <span>Analytics</span>
+                            <DollarSign size={12} />
+                            <span>Withdraw</span>
                           </button>
-                        )}
-                        {showBuyPosition && !isCash && (
+                        ) : (
+                        <>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '4px 8px' }}
+                          onClick={() => setExpandedSymbol(isExpanded ? null : h.id)}
+                          title="Show risk analytics for this security"
+                        >
+                          {isExpanded ? <X size={12} /> : <Activity size={12} />}
+                          <span>Analytics</span>
+                        </button>
+                        {showBuyPosition && (
                           <button
                             className="btn btn-secondary btn-sm"
                             style={{ padding: '4px 8px' }}
@@ -174,26 +184,24 @@ export function HoldingsTable({
                             <span>Buy</span>
                           </button>
                         )}
-                        {!isCash && (
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            style={{ padding: '4px 8px' }}
-                            onClick={() => onOpenTradeModal('SELL', h.symbol)}
-                            title="Sell shares"
-                          >
-                            <ShoppingCart size={12} />
-                            <span>Sell</span>
-                          </button>
-                        )}
-                        {!isCash && (
-                          <button
-                            className="btn btn-secondary btn-sm text-negative"
-                            style={{ padding: '4px 6px' }}
-                            onClick={() => onDeleteHolding(h.id)}
-                            title="Delete holding"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '4px 8px' }}
+                          onClick={() => onOpenTradeModal('SELL', h.symbol)}
+                          title="Sell shares"
+                        >
+                          <ShoppingCart size={12} />
+                          <span>Sell</span>
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm text-negative"
+                          style={{ padding: '4px 6px' }}
+                          onClick={() => onDeleteHolding(h.id)}
+                          title="Delete holding"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                        </>
                         )}
                       </div>
                     </td>

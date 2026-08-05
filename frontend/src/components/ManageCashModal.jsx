@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { X, DollarSign, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 
-export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = 'USD', onSuccess }) {
-  const [actionType, setActionType] = useState('DEPOSIT');
+export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = 'USD', onSuccess, initialAction = 'DEPOSIT' }) {
+  const [actionType, setActionType] = useState(initialAction);
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState(baseCurrency);
   const [loading, setLoading] = useState(false);
@@ -16,8 +16,9 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
       setError(null);
       setSuccessMsg(null);
       setCurrency(baseCurrency);
+      setActionType(initialAction);
     }
-  }, [isOpen, baseCurrency]);
+  }, [isOpen, baseCurrency, initialAction]);
 
   if (!isOpen) return null;
 
