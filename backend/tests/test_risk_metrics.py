@@ -126,6 +126,9 @@ def test_reconstructed_nav_healthy_for_unfunded_buy(client, monkeypatch):
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Nav"}).get_json()
     pid = created["id"]
+    # Buying draws from the global wallet, which writes no portfolio ledger row —
+    # so the BUY is naturally a legacy "BUY with no DEPOSIT" for the portfolio.
+    client.post("/api/wallet/deposit", json={"amount": 1000.0, "currency": "USD"})
     client.post(
         f"/api/portfolios/{pid}/holdings",
         json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
@@ -172,16 +175,17 @@ def test_risk_endpoint_since_last_uses_jensen_alpha_for_recommendation(client, m
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Since"}).get_json()
     pid = created["id"]
-    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post("/api/wallet/deposit", json={"amount": 1000.0})
     client.post(
         f"/api/portfolios/{pid}/holdings",
         json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
     )
 
     today = _date.today()
-    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
-    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
-    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # last trade
+    # Only the add-position BUY is in the portfolio ledger; the wallet deposit
+    # lives elsewhere, so backdate the BUY to be the "last trade" 10 days ago.
+    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
     db.session.commit()
 
     closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}
@@ -209,16 +213,17 @@ def test_risk_endpoint_since_last_when_trade_is_today(client, monkeypatch):
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Today"}).get_json()
     pid = created["id"]
-    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post("/api/wallet/deposit", json={"amount": 1000.0})
     client.post(
         f"/api/portfolios/{pid}/holdings",
         json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
     )
 
     today = _date.today()
-    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
-    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=5)   # deposit
-    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None)                  # trade today
+    # Only the add-position BUY is in the portfolio ledger; backdate it to today
+    # so the "since last transaction" window has no post-trade price movement.
+    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None)
     db.session.commit()
 
     closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}
@@ -266,16 +271,17 @@ def test_nav_since_last_transaction_tracks_price_movement(client, monkeypatch):
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Since"}).get_json()
     pid = created["id"]
-    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post("/api/wallet/deposit", json={"amount": 1000.0})
     client.post(
         f"/api/portfolios/{pid}/holdings",
         json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
     )
 
     today = _date.today()
-    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
-    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
-    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # last trade
+    # Only the add-position BUY is in the portfolio ledger; backdate it 10 days
+    # so the "since last transaction" window has a clean start.
+    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
     db.session.commit()
 
     closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}  # rising to today
@@ -296,20 +302,21 @@ def test_nav_since_last_transaction_tracks_price_movement(client, monkeypatch):
 
 
 def test_nav_with_cash_equals_kpi_current_value(client, monkeypatch):
-    """Including cash in the NAV makes the series' latest point equal the live
-    Portfolio Value KPI (this requires the cash-adjusted buy path, which real
-    trades use)."""
+    """The NAV series' latest point must equal the live Portfolio Value KPI.
+    A BUY draws from the wallet (not the portfolio ledger), so NAV reconstruction
+    must fund the buy internally rather than reporting an unexplained gap."""
     from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Nav"}).get_json()
     pid = created["id"]
-    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post("/api/wallet/deposit", json={"amount": 1000.0})
     client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "AAPL", "quantity": 10, "price": 100.0})
 
     today = _date.today()
-    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
-    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
-    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # buy
+    # Only the BUY is in the portfolio ledger (wallet deposits live elsewhere);
+    # backdate it 10 days so NAV reconstruction spans a real window.
+    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
     db.session.commit()
 
     # Today's close matches the live AAPL price (190) so the NAV's last point
@@ -341,6 +348,9 @@ def test_closed_position_with_unfunded_buys_keeps_returns_sane(client, monkeypat
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Closed"}).get_json()
     pid = created["id"]
+    # Buying draws from the global wallet, which writes no portfolio ledger row —
+    # so the ledger is naturally a legacy series of "unfunded" BUY/SELL rows.
+    client.post("/api/wallet/deposit", json={"amount": 10000.0})
     client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "AAPL", "quantity": 2, "price": 100.0})
     client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "MSFT", "quantity": 5, "price": 100.0})
     client.post(f"/api/portfolios/{pid}/sell", json={"symbol": "MSFT", "quantity": 5, "price": 100.0})
@@ -382,25 +392,23 @@ def test_closed_position_with_unfunded_buys_keeps_returns_sane(client, monkeypat
 
 
 def test_add_holding_cash_tracks_kpi_current_value(client, monkeypatch):
-    """P1 regression: an Add Position on top of existing cash must debit the cash
-    holding so the ledger-replayed NAV[-1] still equals the live KPI
-    current_value. Before reconciling add_holding to the cash path, the live
-    USD-CASH position was left untouched, so the Risk card (NAV) and the KPI
-    card (current_value) disagreed."""
+    """P1 regression: a BUY funded from the wallet must stay consistent between
+    the ledger-replayed NAV and the live KPI current_value. The BUY writes a
+    ledger row; the wallet deposit does not, so NAV[-1] must still equal the
+    live KPI (it must not treat the buy as an unexplained cash outflow)."""
     from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
 
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "CashAdd"}).get_json()
     pid = created["id"]
-    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post("/api/wallet/deposit", json={"amount": 1000.0})
     client.post(
         f"/api/portfolios/{pid}/holdings",
         json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
     )
 
     today = _date.today()
-    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
-    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
-    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # add position
+    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
     db.session.commit()
 
     # Today's close matches the live AAPL price (190) so NAV[-1] == KPI value.
