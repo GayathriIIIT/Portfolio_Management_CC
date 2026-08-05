@@ -163,7 +163,7 @@ export function HoldingsTable({
                             <span>Analytics</span>
                           </button>
                         )}
-                        {showBuyPosition && (
+                        {showBuyPosition && !isCash && (
                           <button
                             className="btn btn-secondary btn-sm"
                             style={{ padding: '4px 8px' }}
@@ -174,23 +174,27 @@ export function HoldingsTable({
                             <span>Buy</span>
                           </button>
                         )}
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px' }}
-                          onClick={() => onOpenTradeModal('SELL', h.symbol)}
-                          title="Sell shares"
-                        >
-                          <ShoppingCart size={12} />
-                          <span>Sell</span>
-                        </button>
-                        <button
-                          className="btn btn-secondary btn-sm text-negative"
-                          style={{ padding: '4px 6px' }}
-                          onClick={() => onDeleteHolding(h.id)}
-                          title="Delete holding"
-                        >
-                          <Trash2 size={12} />
-                        </button>
+                        {!isCash && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '4px 8px' }}
+                            onClick={() => onOpenTradeModal('SELL', h.symbol)}
+                            title="Sell shares"
+                          >
+                            <ShoppingCart size={12} />
+                            <span>Sell</span>
+                          </button>
+                        )}
+                        {!isCash && (
+                          <button
+                            className="btn btn-secondary btn-sm text-negative"
+                            style={{ padding: '4px 6px' }}
+                            onClick={() => onDeleteHolding(h.id)}
+                            title="Delete holding"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
