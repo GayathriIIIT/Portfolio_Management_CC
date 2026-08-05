@@ -1,0 +1,137 @@
+import React, { useState, useEffect } from 'react';
+import { Activity, X } from 'lucide-react';
+import { api } from '../services/api';
+import { RecommendationBanner, MetricGrid } from './riskWidgets';
+
+const RANGES = [
+  { id: '1m', label: '1M' },
+  { id: '3m', label: '3M' },
+  { id: '6m', label: '6M' },
+  { id: '1y', label: '1Y' },
+];
+
+const RANGE_EXPECTED_DAYS = { '1m': 31, '3m': 92, '6m': 184, '1y': 366 };
+
+export function HoldingAnalyticsPanel({ symbol, onClose }) {
+  const [range, setRange] = useState('1y');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [metrics, setMetrics] = useState(null);
+  const [recommendation, setRecommendation] = useState(null);
+
+  useEffect(() => {
+    if (!symbol) return;
+    let isMounted = true;
+    setLoading(true);
+    setError(null);
+
+    api
+      .getStockAnalytics(symbol, range)
+      .then((res) => {
+        if (!isMounted) return;
+        setMetrics(res.metrics || null);
+        setRecommendation(res.recommendation || null);
+      })
+      .catch((err) => {
+        if (isMounted) setError(err.message);
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [symbol, range]);
+
+  return (
+    <div
+      style={{
+        padding: '16px 18px',
+        backgroundColor: 'var(--bg-app)',
+        borderTop: '1px solid var(--border-color)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '0.95rem' }}>
+          <Activity size={16} style={{ color: 'var(--accent-primary)' }} />
+          <span>{symbol} — Risk Analytics</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div
+            style={{
+              display: 'flex',
+              gap: '4px',
+              background: 'var(--bg-card)',
+              padding: '3px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-color)',
+            }}
+          >
+            {RANGES.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setRange(r.id)}
+                style={{
+                  background: range === r.id ? 'var(--accent-primary)' : 'transparent',
+                  color: range === r.id ? '#fff' : 'var(--text-secondary)',
+                  border: 'none',
+                  padding: '3px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontWeight: range === r.id ? '700' : '500',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <button type="button" onClick={onClose} title="Close" aria-label="Close" className="btn btn-secondary btn-sm">
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+
+      {metrics &&
+        metrics.period_days < (RANGE_EXPECTED_DAYS[range] || 0) && (
+          <div
+            style={{
+              marginBottom: '12px',
+              fontSize: '0.75rem',
+              color: 'var(--text-secondary)',
+              background: 'var(--bg-app)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '8px 12px',
+            }}
+          >
+            Only {metrics.period_days} days of price history — the selected period exceeds what
+            Yahoo provides, so metrics cover the full span of available data.
+          </div>
+        )}
+
+      {loading ? (
+        <div style={{ height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+          Fetching {symbol} risk indicators from Yahoo Finance...
+        </div>
+      ) : error ? (
+        <div style={{ height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--danger-text)' }}>
+          Unable to load analytics ({error})
+        </div>
+      ) : !metrics ? (
+        <div className="empty-state">
+          <Activity className="empty-state-icon" />
+          <div>Not enough price history for {symbol} to compute risk metrics yet.</div>
+        </div>
+      ) : (
+        <>
+          <RecommendationBanner recommendation={recommendation} />
+          <MetricGrid metrics={metrics} />
+        </>
+      )}
+    </div>
+  );
+}

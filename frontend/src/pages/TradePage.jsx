@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
+import { rememberTicker } from '../services/tickerCache';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
@@ -121,6 +122,7 @@ export function TradePage({ portfolio, onTradeSuccess }) {
       }
 
       setSuccessMsg(`${txnType} trade executed successfully!`);
+      rememberTicker(sym);
       if (isBrainrot) {
         showToast(
           txnType === 'BUY' ? 'buy-dance.gif' : 'sell-dance.gif',
@@ -146,7 +148,11 @@ export function TradePage({ portfolio, onTradeSuccess }) {
     return <div className="empty-state">No portfolio selected.</div>;
   }
 
-  const nativeTotalValue = (Number(price) || 0) * (Number(quantity) || 0) + Number(fees || 0);
+  const tradeTotal = (Number(price) || 0) * (Number(quantity) || 0);
+  const feeValue = Number(fees || 0);
+  // For a SELL the brokerage fee reduces the proceeds you actually receive; for
+  // a BUY it adds to the cost. Both show the net order value to the user.
+  const nativeTotalValue = txnType === 'SELL' ? tradeTotal - feeValue : tradeTotal + feeValue;
   const stockCurrency = (quoteInfo?.currency || portfolio?.base_currency || 'USD').toUpperCase();
   const baseCurrency = (portfolio?.base_currency || 'USD').toUpperCase();
   const isCrossCurrency = quoteInfo && stockCurrency !== baseCurrency;

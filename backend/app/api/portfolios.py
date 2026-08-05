@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+﻿from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -11,6 +11,10 @@ from app.services.market_price_service import (
     fetch_realtime_quote,
     get_market_price_service,
 )
+from app.services.risk_metrics import compute_risk_metrics
+from app.services.recommendation import generate_recommendation
+from app.services.risk_free_service import get_risk_free_rate_pct
+from app.services.market_price_service import _parse_cash_symbol
 
 BOND_SUGGESTION_SYMBOLS = {
     'BND', 'TLT', 'IEF', 'SHY', 'AGG', 'LQD', 'HYG', 'MUB', 'TIP', 'VGLT', 'BNDX', 'SCHO', 'US10Y-2030'
@@ -18,6 +22,20 @@ BOND_SUGGESTION_SYMBOLS = {
 CASH_SUGGESTION_SYMBOLS = {'USD-CASH'}
 
 bp = Blueprint("portfolios", __name__, url_prefix="/api/portfolios")
+
+PORTFOLIO_RANGE_LOOKBACK = {
+    "1m": 31,
+    "3m": 92,
+    "6m": 184,
+    "1y": 366,
+    "all": None,
+}
+STOCK_RANGE_LOOKBACK = {
+    "1m": 31,
+    "3m": 92,
+    "6m": 184,
+    "1y": 366,
+}
 
 
 def _price_service():
@@ -262,51 +280,6 @@ def _solve_xirr(cash_flows, simple_return_pct=0.0):
     return round(((low + high) / 2.0) * 100.0, 4)
 
 
-def _calculate_alpha_vs_benchmark(d0, portfolio_return_pct, benchmark_sym="SPY"):
-    if d0 is None:
-        return None
-
-    # Never hit the network during tests (which mock yfinance only for the price
-    # service); alpha stays None and the test suite remains hermetic/fast.
-    if current_app.config.get("TESTING"):
-        return None
-
-    import yfinance as yf
-    try:
-        d0_naive = _to_naive_utc(d0)
-        today_naive = datetime.now(timezone.utc).replace(tzinfo=None)
-        # yfinance caps history at a fixed window; cap 5 years so an old holding
-        # doesn't request data the API refuses. Aligning the benchmark window to
-        # the portfolio's actual start date keeps both returns over the same span.
-        lookback_start = max(d0_naive, today_naive - timedelta(days=365 * 5))
-        start_str = lookback_start.strftime("%Y-%m-%d")
-        today_str = today_naive.strftime("%Y-%m-%d")
-        ticker = yf.Ticker(benchmark_sym)
-        hist = ticker.history(start=start_str, end=today_str)
-        if hist.empty or "Close" not in hist.columns or len(hist.dropna(subset=["Close"])) < 2:
-            return None
-
-        # yfinance often returns a NaN close for the still-in-progress trading
-        # day (and sometimes other broken rows). Drop them before measuring the
-        # benchmark return, otherwise `first_price`/`last_price` become NaN and
-        # alpha is silently None or emits an invalid NaN into the JSON payload.
-        hist.index = hist.index.tz_localize(None) if hist.index.tz is not None else hist.index
-        closes = hist["Close"].dropna()
-        closes = closes[closes.index >= d0_naive]
-        if len(closes) < 2:
-            return None
-
-        first_price = float(closes.iloc[0])
-        last_price = float(closes.iloc[-1])
-        if first_price > 0:
-            bench_return = ((last_price - first_price) / first_price) * 100.0
-            alpha = portfolio_return_pct - bench_return
-            return round(alpha, 4)
-    except Exception:
-        pass
-    return None
-
-
 def _compute_portfolio_metrics(portfolio, override_prices=None):
     invested_value = 0.0
     current_value = 0.0
@@ -366,13 +339,7 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
                         proceeds = (float(t.quantity) * float(t.price) - float(t.fees or 0)) * fx_rate
                         cash_flows.append((dt, proceeds))
             if d0 is not None:
-                total_stock_value = 0.0
-                for holding in portfolio.holdings:
-                    if holding.security.type != "CASH":
-                        h_serialized = next((x for x in holdings if x["id"] == holding.id), None)
-                        if h_serialized:
-                            total_stock_value += h_serialized["market_value"]
-                cash_flows.append((datetime.now(timezone.utc), total_stock_value))
+                cash_flows.append((datetime.now(timezone.utc), current_value))
 
     # Fallback for portfolios that hold positions but have no ledger rows yet
     # (e.g. holdings created before BUY/SELL entries were recorded). We infer a
@@ -403,26 +370,26 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
     if cash_flows:
         try:
             xirr = _solve_xirr(cash_flows, profit_loss_percentage)
-            alpha = _calculate_alpha_vs_benchmark(d0, profit_loss_percentage, "SPY")
         except Exception:
             pass
 
     # Annualizing a sub-one-year investment window is meaningless (a tiny 2-week
     # gain extrapolates to millions of %), so suppress XIRR until the portfolio's
     # money has been at work for at least a full year. The frontend then hides
-    # the "Annualized Return" card instead of showing an absurd figure.
+    # the "Annualized Return" card instead of showing an absurd figure. We never
+    # fall back to relabeling the lifetime simple return as XIRR — without real
+    # dated cash flows there is no money-weighted rate to report.
     min_xirr_days = int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365))
     if d0 is not None and (
         _to_naive_utc(datetime.now(timezone.utc)) - _to_naive_utc(d0)
     ).days < min_xirr_days:
         xirr = None
-    elif xirr is None:
-        # Never leave the metric blank: fall back to the portfolio's simple
-        # return (only reached for year+ windows that still lack cash flows).
-        xirr = round(profit_loss_percentage, 4)
 
-    if alpha is None:
-        alpha = 0.0
+    # Jensen's alpha is computed separately (from the reconstructed NAV vs SPY) in
+    # get_portfolio_analytics; /analytics/risk reads it straight from its own
+    # risk metrics. Keeping it out of here avoids a second NAV reconstruction on
+    # every request, and ensures only one, CAPM-based "alpha" exists anywhere.
+    alpha = None
 
     return {
         "portfolio_id": portfolio.id,
@@ -520,7 +487,11 @@ def _get_or_create_security(symbol):
         }
 
     security_type = "STOCK"
-    if symbol in CASH_SUGGESTION_SYMBOLS:
+    cash_ccy = _parse_cash_symbol(symbol)
+    if cash_ccy is not None:
+        security_type = "CASH"
+        info = {"name": f"{cash_ccy} Cash", "exchange": None, "currency": cash_ccy, "sector": "CASH"}
+    elif symbol in CASH_SUGGESTION_SYMBOLS:
         security_type = "CASH"
     elif symbol in BOND_SUGGESTION_SYMBOLS:
         security_type = "BOND"
@@ -743,7 +714,369 @@ def get_portfolio(portfolio_id):
 @bp.get("/<int:portfolio_id>/analytics")
 def get_portfolio_analytics(portfolio_id):
     portfolio = _get_portfolio_or_404(portfolio_id)
-    return jsonify(_compute_portfolio_metrics(portfolio))
+    result = _compute_portfolio_metrics(portfolio)
+    result["alpha"] = _compute_jensen_alpha(portfolio, result["base_currency"])
+    return jsonify(result)
+
+
+def _forward_fill_closes(closes, day):
+    """Return the latest close <= `day`, forward-filled from a {date: close} map."""
+    best = None
+    for d in sorted(closes):
+        if d <= day:
+            best = closes[d]
+        else:
+            break
+    return best
+
+
+def _align_benchmark_returns(bench_closes, nav_points):
+    """Forward-fill benchmark closes onto NAV dates and return consecutive daily
+    returns aligned with `nav_points`. Returns None when there isn't enough data."""
+    if not bench_closes or not nav_points:
+        return None
+    bench_values = []
+    for pt in nav_points:
+        d = date.fromisoformat(pt["date"])
+        bench_values.append(_forward_fill_closes(bench_closes, d))
+    valid = [v for v in bench_values if v is not None]
+    if len(valid) < 2:
+        return None
+    returns = []
+    for i in range(1, len(bench_values)):
+        prev = bench_values[i - 1]
+        cur = bench_values[i]
+        if prev is None or cur is None or prev == 0:
+            returns.append(None)
+        else:
+            returns.append((cur - prev) / prev)
+    return returns
+
+
+def _live_portfolio_value(portfolio, fx, base_curr):
+    """Live sum of current holding market values in the base currency.
+
+    Mirrors the ``current_value`` the /analytics KPI reports: each holding is
+    priced at its current live quote (CASH at face value) converted at the
+    current FX rate.
+    """
+    total = 0.0
+    for h in portfolio.holdings:
+        sec_curr = h.security.currency or "USD"
+        rate = fx.get_fx_rate(sec_curr, base_curr)
+        qty = float(h.quantity)
+        if h.security.type == "CASH":
+            px = float(h.avg_cost)
+        else:
+            try:
+                px = float(fx.get_current_price(h.security.symbol))
+            except UnknownTickerError:
+                px = float(h.avg_cost)
+        total += qty * px * rate
+    return total
+
+
+def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
+    """Rebuild a daily portfolio NAV (value per calendar day, base currency).
+
+    Replays the BUY/SELL/DEPOSIT/WITHDRAW ledger into running positions + cash,
+    pricing every position with its symbol's historical daily close (yfinance,
+    forward-filled) converted at the current FX rate. Portfolios that have
+    positions but no ledger rows fall back to treating each position's cost basis
+    as invested on its first-purchase date. Returns ``(nav_points, d0,
+    external_flows)`` where ``nav_points`` is a list of ``{date, value}``
+    ascending, ``d0`` is the window start, and ``external_flows`` is a
+    ``{date: amount}`` map of net DEPOSIT/WITHDRAW cash flows (used to build a
+    Time-Weighted Return).
+
+    Cash (the ``{CCY}-CASH`` position) is priced at a flat 1.0 and carried
+    alongside the holdings. The final series is anchored to the live
+    "Portfolio Value" / ``current_value`` KPI: it is uniformly scaled so its
+    latest point equals that value, keeping the graph consistent with the
+    dashboard while leaving every daily return unchanged. Unfunded BUYs (e.g. a
+    position added without a prior deposit) are funded with opening capital: the
+    running cash balance is offset so its cumulative minimum is zero, which
+    keeps every internal buy/sell value-neutral and the trade size out of the
+    daily returns.
+
+    ``lookback_days`` caps the window to the trailing N calendar days (e.g. 31
+    for "1M"). ``start_date`` (a ``date``) overrides the window start from the
+    last transaction onward. Events before the window still accrue into
+    positions/cash so the opening NAV is correct.
+    """
+    base_curr = portfolio.base_currency or "USD"
+    non_cash = [h for h in portfolio.holdings if h.security.type != "CASH"]
+
+    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    fx = _price_service()
+
+    events = []
+    external_flows = {}
+    txns = (
+        PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
+        .order_by(PortfolioTransaction.executed_at.asc())
+        .all()
+    )
+    for t in txns:
+        dt = _to_naive_utc(t.executed_at).date()
+        sec_curr = t.security.currency or "USD"
+        rate = fx.get_fx_rate(sec_curr, base_curr)
+        qty = float(t.quantity)
+        px = float(t.price)
+        fee = float(t.fees or 0)
+        if t.txn_type == "BUY":
+            events.append(
+                {"date": dt, "security_id": t.security_id, "qty_delta": qty, "cash_delta": -(qty * px + fee) * rate}
+            )
+        elif t.txn_type == "SELL":
+            events.append(
+                {"date": dt, "security_id": t.security_id, "qty_delta": -qty, "cash_delta": (qty * px - fee) * rate}
+            )
+        elif t.txn_type == "DEPOSIT":
+            amount = qty * rate
+            events.append({"date": dt, "security_id": None, "qty_delta": 0, "cash_delta": amount})
+            external_flows[dt.isoformat()] = external_flows.get(dt.isoformat(), 0.0) + amount
+        elif t.txn_type == "WITHDRAW":
+            amount = -(qty * rate)
+            events.append({"date": dt, "security_id": None, "qty_delta": 0, "cash_delta": amount})
+            external_flows[dt.isoformat()] = external_flows.get(dt.isoformat(), 0.0) + amount
+
+    if not events and non_cash:
+        for h in non_cash:
+            cost = float(h.avg_cost) * float(h.quantity)
+            if cost <= 0:
+                continue
+            start = h.first_purchased_at or portfolio.created_at
+            if start is None:
+                continue
+            start = _to_naive_utc(start).date()
+            events.append(
+                {"date": start, "security_id": h.security_id, "qty_delta": float(h.quantity), "cash_delta": -cost * fx.get_fx_rate(h.security.currency or "USD", base_curr)}
+            )
+
+    if not events:
+        return [], None, {}
+
+    d0 = min(e["date"] for e in events)
+    if d0 > today:
+        return [], None, {}
+
+    start = d0
+    if lookback_days:
+        start = max(d0, today - timedelta(days=lookback_days))
+    if start_date is not None:
+        start = max(d0, start_date)
+    if start > today:
+        return [], None, {}
+
+    # Price every security that appears in the ledger — including fully closed
+    # positions that no longer have a holding row — so interim positions are
+    # valued in the NAV instead of distorting returns with unaccounted cash.
+    held_ids = {e["security_id"] for e in events if e["security_id"]}
+    sec_by_id = {s.id: s for s in Security.query.filter(Security.id.in_(held_ids)).all()}
+
+    # Fetch closes a little before the window so the opening day has a price anchor.
+    closes_start = max(d0, start - timedelta(days=7))
+    closes_by_sym = {}
+    fx_by_sec = {}
+    for hid in held_ids:
+        sec = sec_by_id.get(hid)
+        if sec is None or sec.type == "CASH":
+            continue
+        closes_by_sym[hid] = market_price_service.collect_daily_closes(sec.symbol, closes_start, today)
+        fx_by_sec[hid] = fx.get_fx_rate(sec.currency or "USD", base_curr)
+
+    positions = {}
+    events_sorted = sorted(events, key=lambda e: e["date"])
+
+    # Fund unfunded BUYs with opening capital rather than per-day flow hacks.
+    # Cash is the running sum of every BUY/SELL/DEPOSIT/WITHDRAW cash delta; an
+    # unfunded BUY would otherwise drive it negative and a negative base
+    # manufactures absurd returns. Offset the starting balance by the cumulative
+    # minimum so cash stays >= 0, which makes each internal buy/sell
+    # value-neutral (cash <-> position) and leaves only real DEPOSIT/WITHDRAW
+    # flows in ``external_flows``. The trade size then never shows up as a fake
+    # daily gain/loss, and fully-closed positions stay priced (see above).
+    cumulative_cash = 0.0
+    min_cash = 0.0
+    for e in events_sorted:
+        cumulative_cash += e["cash_delta"]
+        if cumulative_cash < min_cash:
+            min_cash = cumulative_cash
+    cash_balance = -min_cash
+    event_idx = 0
+
+    nav_points = []
+    current = start
+    while current <= today:
+        while event_idx < len(events_sorted) and events_sorted[event_idx]["date"] <= current:
+            e = events_sorted[event_idx]
+            if e["security_id"]:
+                positions[e["security_id"]] = positions.get(e["security_id"], 0.0) + e["qty_delta"]
+            cash_balance += e["cash_delta"]
+            event_idx += 1
+        if cash_balance < 0:
+            # Floating-point residue only; the min-offset guarantees non-negativity.
+            cash_balance = 0.0
+
+        # NAV = market value of holdings + cash. Cash (the ``{CCY}-CASH``
+        # position) is priced at its face value (1.0), so adding the running
+        # cash balance makes the series' latest value match the live Portfolio
+        # Value KPI while excluding deposit/withdrawal jumps from returns via
+        # Time-Weighted Return (see get_portfolio_risk).
+        value = cash_balance
+        for hid, qty in positions.items():
+            if qty <= 0:
+                continue
+            px = _forward_fill_closes(closes_by_sym.get(hid) or {}, current)
+            if px is None:
+                continue
+            value += qty * px * fx_by_sec.get(hid, 1.0)
+        nav_points.append({"date": current.isoformat(), "value": round(value, 4)})
+        current += timedelta(days=1)
+
+    # Drop leading rows that are zero or negligible relative to the series so
+    # percentage returns are never measured off a ~0 base (e.g. days before any
+    # holding has a priced close).
+    if nav_points:
+        max_value = max((p["value"] for p in nav_points), default=0.0)
+        trivial = abs(max_value) * 1e-6 if max_value else 1.0
+        idx = 0
+        while idx < len(nav_points) and (
+            nav_points[idx]["value"] <= 0 or abs(nav_points[idx]["value"]) < trivial
+        ):
+            idx += 1
+        nav_points = nav_points[idx:]
+        # External flows that fall on trimmed-away days are not sub-period
+        # boundaries of the reported window.
+        for d in list(external_flows):
+            if d < (nav_points[0]["date"] if nav_points else ""):
+                external_flows.pop(d, None)
+        if not nav_points:
+            return [], None, {}
+
+    # Anchor the series' latest point to the live "Portfolio Value" KPI
+    # (current_value). The reconstruction can drift from the live value when a
+    # portfolio's ledger has unfunded BUYs, or deposits/withdrawals that don't
+    # line up with the tracked cash holding, or when today's close differs from
+    # the live quote. Uniformly scaling the series to end at current_value keeps
+    # the graph's final number consistent with the dashboard KPI while
+    # preserving every daily return (ratios are unchanged).
+    current_value = _live_portfolio_value(portfolio, fx, base_curr)
+    last_value = nav_points[-1]["value"]
+    if current_value > 0 and last_value > 0:
+        scale = current_value / last_value
+        if abs(scale - 1.0) > 1e-9:
+            nav_points = [
+                {"date": p["date"], "value": round(p["value"] * scale, 4)}
+                for p in nav_points
+            ]
+
+    return nav_points, d0, external_flows
+
+
+def _compute_jensen_alpha(portfolio, base_curr):
+    """CAPM Jensen's alpha (annualized % vs SPY) from the reconstructed NAV.
+
+    This is the single, consistent "alpha" used across the KPI card and the risk
+    card — both read a CAPM alpha computed from the portfolio's daily NAV returns
+    regressed against SPY, not a raw excess-return figure. Needs a full year of
+    history (same gate as XIRR / annualized metrics); returns None otherwise so
+    the UI renders "N/A" instead of an extrapolated number.
+    """
+    if current_app.config.get("TESTING"):
+        return None
+
+    nav, _d0, flows = _reconstruct_nav_series(portfolio)
+    if not nav or len(nav) < 3:
+        return None
+
+    bench_returns = None
+    try:
+        bench_closes = market_price_service.collect_daily_closes(
+            "SPY", date.fromisoformat(nav[0]["date"]), nav[-1]["date"]
+        )
+        bench_returns = _align_benchmark_returns(bench_closes, nav)
+    except Exception:
+        bench_returns = None
+
+    flows_aligned = [flows.get(pt["date"], 0.0) for pt in nav]
+    rf = get_risk_free_rate_pct()
+    if rf is None:
+        rf = float(current_app.config.get("RISK_FREE_RATE", 4.0))
+
+    metrics = compute_risk_metrics(
+        [pt["value"] for pt in nav],
+        bench_returns=bench_returns,
+        rf_pct=rf,
+        min_annualize_days=int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365)),
+        external_flows=flows_aligned,
+    )
+    return metrics.get("jensen_alpha")
+
+
+def _portfolio_fundamentals(portfolio, base_curr="USD"):
+    """Value-weighted fundamental snapshot of the portfolio's non-cash holdings.
+
+    Best-effort: any holding whose quote/fundamentals can't be resolved is
+    skipped, and ``None`` is returned when nothing usable exists. The weighted
+    P/E, dividend yield, market cap and top-sector concentration feed the
+    recommendation engine's valuation & concentration signals.
+    """
+    fx = _price_service()
+    total_mv = 0.0
+    pe_num = pe_den = 0.0
+    dy_num = dy_den = 0.0
+    mcap_num = 0.0
+    sector_mv = {}
+
+    for holding in portfolio.holdings:
+        if holding.security.type == "CASH":
+            continue
+        symbol = holding.security.symbol
+        try:
+            price = fx.get_current_price(symbol)
+            rate = fx.get_fx_rate(holding.security.currency or "USD", base_curr)
+        except Exception:
+            continue
+        mv = float(holding.quantity) * float(price) * rate
+        if mv <= 0:
+            continue
+        total_mv += mv
+        sector = holding.security.sector or "Other"
+        sector_mv[sector] = sector_mv.get(sector, 0.0) + mv
+        try:
+            fund = fx.get_fundamentals(symbol) or {}
+        except Exception:
+            fund = {}
+        pe = fund.get("trailing_pe")
+        if pe and float(pe) > 0:
+            pe_num += float(pe) * mv
+            pe_den += mv
+        dy = fund.get("dividend_yield")
+        if dy is not None:
+            dy_num += float(dy) * mv
+            dy_den += mv
+        mcap = fund.get("market_cap")
+        if mcap:
+            mcap_num += float(mcap) * mv
+
+    if total_mv <= 0:
+        return None
+
+    top_sector = None
+    top_sector_pct = 0.0
+    if sector_mv:
+        top_sector = max(sector_mv, key=sector_mv.get)
+        top_sector_pct = sector_mv[top_sector] / total_mv * 100.0
+
+    return {
+        "weighted_pe": round(pe_num / pe_den, 2) if pe_den else None,
+        "dividend_yield": round(dy_num / dy_den, 4) if dy_den else None,
+        "market_cap": round(mcap_num / total_mv, 0) if total_mv else None,
+        "top_sector": top_sector,
+        "top_sector_pct": round(top_sector_pct, 2),
+    }
 
 
 @bp.get("/<int:portfolio_id>/analytics/chart")
@@ -780,6 +1113,249 @@ def get_portfolio_chart_data(portfolio_id):
             "series": series,
             "points": series[0]["points"] if series else [],
             "benchmark": benchmark_data,
+        }
+    )
+
+
+@bp.get("/<int:portfolio_id>/analytics/risk")
+def get_portfolio_risk(portfolio_id):
+    portfolio = _get_portfolio_or_404(portfolio_id)
+
+    range_key = request.args.get("range", "all")
+    if isinstance(range_key, str):
+        range_key = range_key.strip().lower()
+    if range_key not in PORTFOLIO_RANGE_LOOKBACK:
+        raise ApiError("'range' must be one of '1m', '3m', '6m', '1y', or 'all'", status_code=400)
+    lookback_days = PORTFOLIO_RANGE_LOOKBACK[range_key]
+
+    # Optional "since last transaction" view: window starts at the most recent
+    # ledger row, so there are no trades inside the window and the return is
+    # pure price movement (a buy/sell-funded ~% jump can never inflate it).
+    since = request.args.get("since", "").strip().lower()
+    start_date = None
+    if since == "last":
+        # Anchor the window on the most recent BUY/SELL (not a later
+        # DEPOSIT/WITHDRAW), so the view measures pure price movement after the
+        # last trade. A deposit made after the last trade would otherwise pin the
+        # window to today's date and yield no usable data.
+        last_dt = (
+            PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
+            .filter(PortfolioTransaction.txn_type.in_(("BUY", "SELL")))
+            .order_by(PortfolioTransaction.executed_at.desc())
+            .first()
+        )
+        if last_dt is None:
+            last_dt = (
+                PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
+                .order_by(PortfolioTransaction.executed_at.desc())
+                .first()
+            )
+        if last_dt is not None:
+            start_date = _to_naive_utc(last_dt.executed_at).date()
+            lookback_days = None  # ignore the range selector; show since the last trade
+
+    empty_response = {
+        "portfolio_id": portfolio.id,
+        "metrics": None,
+        "recommendation": None,
+        "nav": [],
+        "benchmark": "SPY",
+        "range": range_key,
+        "since": since,
+        "message": None,
+    }
+
+    # Never hit the network during tests (which mock yfinance only for the price
+    # service); the pure math in compute_risk_metrics is unit-tested separately.
+    if current_app.config.get("TESTING"):
+        return jsonify(empty_response)
+
+    rf = get_risk_free_rate_pct()
+    if rf is None:
+        rf = float(current_app.config.get("RISK_FREE_RATE", 4.0))
+
+    nav, _d0, external_flows = _reconstruct_nav_series(
+        portfolio, lookback_days=lookback_days, start_date=start_date
+    )
+
+    # Value-based metrics (total return, max drawdown, best/worst day, daily
+    # volatility) come straight from the first/last NAV values and are always
+    # meaningful — even a same-day "since last trade" window reports the current
+    # value at 0% return. Risk-family metrics (annualized, Sharpe, beta, alpha)
+    # stay gated inside compute_risk_metrics by sufficient_history, so a short
+    # window simply leaves them None instead of blanking the whole card.
+    if not nav:
+        response = dict(empty_response)
+        response["message"] = (
+            "The portfolio has no transactions to measure yet — add a deposit "
+            "and a buy, then check back after it builds up some price history."
+        )
+        return jsonify(response)
+
+    # Benchmark (SPY) daily closes over the same window, forward-filled and
+    # aligned to the NAV dates so beta/correlation/capture line up with the
+    # portfolio's daily returns.
+    bench_returns = None
+    try:
+        bench_closes = market_price_service.collect_daily_closes(
+            "SPY", date.fromisoformat(nav[0]["date"]), nav[-1]["date"]
+        )
+        bench_returns = _align_benchmark_returns(bench_closes, nav)
+    except Exception:
+        bench_returns = None
+
+    # External (DEPOSIT/WITHDRAW) flows aligned to NAV days let compute_risk_metrics
+    # build a Time-Weighted Return and skip deposit/withdraw "best days".
+    flows_aligned = [external_flows.get(pt["date"], 0.0) for pt in nav]
+
+    metrics = compute_risk_metrics(
+        [pt["value"] for pt in nav],
+        bench_returns=bench_returns,
+        rf_pct=rf,
+        min_annualize_days=int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365)),
+        external_flows=flows_aligned,
+    )
+
+    recommendation = None
+    try:
+        fundamentals = _portfolio_fundamentals(portfolio, base_curr=portfolio.base_currency or "USD")
+        recommendation = generate_recommendation(
+            metrics,
+            alpha=metrics.get("jensen_alpha"),
+            xirr=metrics.get("annualized_return"),
+            profit_loss_percentage=metrics.get("total_return"),
+            fundamentals=fundamentals,
+        )
+    except Exception:
+        recommendation = None
+
+    return jsonify(
+        {
+            "portfolio_id": portfolio.id,
+            "metrics": metrics,
+            "recommendation": recommendation,
+            "nav": nav,
+            "benchmark": "SPY",
+            "range": range_key,
+            "since": since,
+        }
+    )
+
+
+@bp.get("/market_price/analytics")
+def get_stock_analytics():
+    symbol = request.args.get("symbol")
+    if not symbol or not isinstance(symbol, str) or not symbol.strip():
+        raise ApiError("'symbol' is required", status_code=400)
+    symbol = symbol.strip().upper()
+
+    range_key = request.args.get("range", "1y")
+    if isinstance(range_key, str):
+        range_key = range_key.strip().lower()
+    if range_key not in STOCK_RANGE_LOOKBACK:
+        raise ApiError("'range' must be one of '1m', '3m', '6m', or '1y'", status_code=400)
+    lookback_days = STOCK_RANGE_LOOKBACK[range_key]
+
+    empty_response = {
+        "symbol": symbol,
+        "name": None,
+        "metrics": None,
+        "recommendation": None,
+        "nav": [],
+        "benchmark": "SPY",
+        "range": range_key,
+    }
+
+    # Never hit the network during tests (which mock yfinance only for the price
+    # service); the pure math in compute_risk_metrics is unit-tested separately.
+    if current_app.config.get("TESTING"):
+        return jsonify(empty_response)
+
+    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    start = today - timedelta(days=lookback_days)
+
+    try:
+        closes = market_price_service.collect_daily_closes(symbol, start, today)
+    except Exception:
+        closes = {}
+    if not closes or len(closes) < 3:
+        return jsonify(empty_response)
+
+    nav = [{"date": d.isoformat(), "value": round(p, 4)} for d, p in sorted(closes.items())]
+    nav = [pt for pt in nav if date.fromisoformat(pt["date"]) >= start]
+    if len(nav) < 3:
+        return jsonify(empty_response)
+
+    bench_returns = None
+    bench_closes = {}
+    try:
+        bench_closes = market_price_service.collect_daily_closes("SPY", start, today)
+        bench_returns = _align_benchmark_returns(bench_closes, nav)
+    except Exception:
+        bench_returns = None
+
+    rf = get_risk_free_rate_pct()
+    if rf is None:
+        rf = float(current_app.config.get("RISK_FREE_RATE", 4.0))
+
+    metrics = compute_risk_metrics(
+        [pt["value"] for pt in nav],
+        bench_returns=bench_returns,
+        rf_pct=rf,
+        min_annualize_days=int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365)),
+    )
+
+    # Stock-level alpha = excess return vs SPY over the window.
+    alpha = None
+    stock_ret = metrics.get("total_return")
+    spy_ret = None
+    try:
+        sorted_bench = sorted(bench_closes.items())
+        if len(sorted_bench) >= 2 and sorted_bench[0][1]:
+            spy_ret = ((sorted_bench[-1][1] - sorted_bench[0][1]) / sorted_bench[0][1]) * 100.0
+    except Exception:
+        spy_ret = None
+    if stock_ret is not None and spy_ret is not None:
+        alpha = round(stock_ret - spy_ret, 4)
+
+    # Single-stock view also supplies valuation context to the recommendation.
+    fund = None
+    try:
+        info = market_price_service.get_fundamentals(symbol) or {}
+    except Exception:
+        info = {}
+    pe = info.get("trailing_pe")
+    dy = info.get("dividend_yield")
+    fund = {
+        "weighted_pe": round(float(pe), 2) if pe and float(pe) > 0 else None,
+        "dividend_yield": float(dy) if dy is not None else None,
+        "top_sector": None,
+        "top_sector_pct": 0.0,
+    }
+
+    recommendation = generate_recommendation(
+        metrics,
+        alpha=alpha,
+        xirr=metrics.get("annualized_return"),
+        profit_loss_percentage=metrics.get("total_return"),
+        fundamentals=fund,
+    )
+
+    name = None
+    try:
+        name = fetch_realtime_quote(symbol).get("name")
+    except Exception:
+        name = None
+
+    return jsonify(
+        {
+            "symbol": symbol,
+            "name": name,
+            "metrics": metrics,
+            "recommendation": recommendation,
+            "nav": nav,
+            "benchmark": "SPY",
+            "range": range_key,
         }
     )
 
@@ -1033,6 +1609,23 @@ def add_holding(portfolio_id):
     symbol = _require_string(payload, "symbol").upper()
     quantity = _require_positive_int(payload, "quantity")
     purchase_price = _require_positive_number(payload, "purchase_price")
+    total_cost = purchase_price * quantity
+
+    # Adjust cash balance if cash position exists
+    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
+    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
+    if cash_sec is not None:
+        cash_holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=cash_sec.id
+        ).first()
+        if cash_holding is not None:
+            avail_cash = float(cash_holding.quantity)
+            if avail_cash < total_cost:
+                raise ApiError(
+                    f"Insufficient cash balance. Order total: ${total_cost:.2f}, Available cash: ${avail_cash:.2f}",
+                    status_code=400,
+                )
+            cash_holding.quantity = avail_cash - total_cost
 
     security = _get_or_create_security(symbol)
     holding = SecurityHolding.query.filter_by(
@@ -1082,6 +1675,18 @@ def buy_holding(portfolio_id):
 
     symbol = _require_string(payload, "symbol").upper()
     quantity = _require_positive_number(payload, "quantity")
+
+    # Buying cash == depositing money. Cash is never priced or routed through
+    # Yahoo, so route it to the cash ledger instead of creating a stock position.
+    cash_ccy = _parse_cash_symbol(symbol)
+    if cash_ccy is not None:
+        holding, transaction = _adjust_cash(portfolio, cash_ccy, quantity, "deposit")
+        return jsonify({
+            "message": "Cash deposited successfully",
+            "holding": _serialize_holding(holding),
+            "transaction": _serialize_transaction(transaction),
+        }), 201
+
     price = payload.get("price")
     if price is None:
         try:
@@ -1172,6 +1777,17 @@ def sell_holding(portfolio_id):
 
     symbol = _require_string(payload, "symbol").upper()
     quantity = _require_positive_number(payload, "quantity")
+
+    # Selling cash == withdrawing money. Route to the cash ledger; a bottomed-out
+    # balance is rejected by _adjust_cash.
+    cash_ccy = _parse_cash_symbol(symbol)
+    if cash_ccy is not None:
+        holding, transaction = _adjust_cash(portfolio, cash_ccy, quantity, "withdraw")
+        return jsonify({
+            "message": "Cash withdrawn successfully",
+            "transaction": _serialize_transaction(transaction),
+        }), 201
+
     price = payload.get("price")
     if price is None:
         try:
@@ -1290,46 +1906,8 @@ def deposit_cash(portfolio_id):
     
     amount = _require_positive_number(payload, "amount")
     currency = payload.get("currency", "USD").upper()
-    symbol = f"{currency}-CASH"
     
-    security = Security.query.filter_by(symbol=symbol).first()
-    if security is None:
-        security = Security(
-            symbol=symbol,
-            name=f"{currency} Cash",
-            type="CASH",
-            currency=currency,
-            interest_rate=0.045
-        )
-        db.session.add(security)
-        db.session.flush()
-
-    holding = SecurityHolding.query.filter_by(
-        portfolio_id=portfolio.id, security_id=security.id
-    ).first()
-    
-    if holding is None:
-        holding = SecurityHolding(
-            portfolio_id=portfolio.id,
-            security_id=security.id,
-            quantity=amount,
-            avg_cost=1.0,
-        )
-        db.session.add(holding)
-    else:
-        holding.quantity = float(holding.quantity) + amount
-
-    transaction = PortfolioTransaction(
-        portfolio_id=portfolio.id,
-        security_id=security.id,
-        txn_type="DEPOSIT",
-        quantity=amount,
-        price=1.0,
-        fees=0.0,
-        executed_at=datetime.now(timezone.utc),
-    )
-    db.session.add(transaction)
-    db.session.commit()
+    holding, transaction = _adjust_cash(portfolio, currency, amount, "deposit")
     
     return jsonify({
         "message": "Cash deposited successfully",
@@ -1345,27 +1923,67 @@ def withdraw_cash(portfolio_id):
     
     amount = _require_positive_number(payload, "amount")
     currency = payload.get("currency", "USD").upper()
-    symbol = f"{currency}-CASH"
     
+    holding, transaction = _adjust_cash(portfolio, currency, amount, "withdraw")
+    
+    return jsonify({
+        "message": "Cash withdrawn successfully",
+        "transaction": _serialize_transaction(transaction)
+    }), 201
+
+
+def _adjust_cash(portfolio, currency, amount, direction):
+    """Apply a deposit/withdrawal to the portfolio's `{currency}-CASH` position.
+
+    Used by both the deposit/withdraw endpoints and the buy/sell endpoints when
+    the user trades a cash symbol directly. Cash is always stored at an `avg_cost`
+    of 1.0 and carries no brokerage fees.
+    """
+    currency = (currency or "USD").upper()
+    symbol = f"{currency}-CASH"
+
     security = Security.query.filter_by(symbol=symbol).first()
     if security is None:
-        raise NotFoundError(f"Cash position for {currency} not found in this portfolio")
-        
+        security = Security(
+            symbol=symbol,
+            name=f"{currency} Cash",
+            type="CASH",
+            currency=currency,
+            interest_rate=0.045,
+        )
+        db.session.add(security)
+        db.session.flush()
+
     holding = SecurityHolding.query.filter_by(
         portfolio_id=portfolio.id, security_id=security.id
     ).first()
-    
-    if holding is None or float(holding.quantity) < amount:
-        raise ApiError("Insufficient cash balance for withdrawal", status_code=400)
-        
-    holding.quantity = float(holding.quantity) - amount
-    if float(holding.quantity) == 0.0:
-        db.session.delete(holding)
-        
+
+    if direction == "withdraw":
+        if holding is None or float(holding.quantity) < amount:
+            raise ApiError("Insufficient cash balance for withdrawal", status_code=400)
+        new_qty = float(holding.quantity) - amount
+        if new_qty <= 0:
+            db.session.delete(holding)
+        else:
+            holding.quantity = new_qty
+        txn_type = "WITHDRAW"
+    else:
+        if holding is None:
+            holding = SecurityHolding(
+                portfolio_id=portfolio.id,
+                security_id=security.id,
+                quantity=amount,
+                avg_cost=1.0,
+            )
+            db.session.add(holding)
+        else:
+            holding.quantity = float(holding.quantity) + amount
+        txn_type = "DEPOSIT"
+
     transaction = PortfolioTransaction(
         portfolio_id=portfolio.id,
         security_id=security.id,
-        txn_type="WITHDRAW",
+        txn_type=txn_type,
         quantity=amount,
         price=1.0,
         fees=0.0,
@@ -1373,9 +1991,5 @@ def withdraw_cash(portfolio_id):
     )
     db.session.add(transaction)
     db.session.commit()
-    
-    return jsonify({
-        "message": "Cash withdrawn successfully",
-        "transaction": _serialize_transaction(transaction)
-    }), 201
+    return holding, transaction
 

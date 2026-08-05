@@ -76,10 +76,13 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
       </div>
 
-      {/* 4. Total Return % */}
+      {/* 4. Total Return on Cost % — unrealized P&L on the cost basis of the
+          positions currently held. Deliberately different from the risk card's
+          Total Return (TWR), which is time-weighted over the whole window and
+          includes realized/closed positions and strips deposits. */}
       <div className="card kpi-card">
         <div className="kpi-header">
-          <span>Total Return</span>
+          <span>Return on Cost</span>
           <PieChart size={18} style={{ color: 'var(--accent-primary)' }} />
         </div>
         <div className={`kpi-value ${isPositive ? 'text-positive' : 'text-negative'}`}>
@@ -87,7 +90,10 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
         <div className="kpi-subtext">
           <span className={`badge ${isPositive ? 'badge-success' : 'badge-danger'}`}>
-            {isPositive ? '▲' : '▼'}             {Math.abs(profit_loss_percentage).toFixed(2)}% Overall
+            {isPositive ? '▲' : '▼'}             {Math.abs(profit_loss_percentage).toFixed(2)}% on cost basis
+          </span>
+          <span style={{ display: 'block', marginTop: 2, fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+            Unrealized on current holdings (≠ Total Return TWR)
           </span>
         </div>
       </div>
@@ -112,10 +118,10 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
       )}
 
-      {/* 6. Benchmark Alpha (vs SPY) */}
+      {/* 6. Jensen's Alpha (CAPM vs SPY) */}
       <div className="card kpi-card">
         <div className="kpi-header">
-          <span>Benchmark Alpha (vs SPY)</span>
+          <span>Jensen's Alpha (vs SPY)</span>
           <Zap size={18} style={{ color: '#f59e0b' }} />
         </div>
         <div className={`kpi-value ${alpha != null ? (isAlphaPositive ? 'text-positive' : 'text-negative') : ''}`}>
@@ -124,10 +130,10 @@ export function KPICards({ analytics, currency = 'USD' }) {
         <div className="kpi-subtext" style={{ color: 'var(--text-secondary)' }}>
           {alpha != null ? (
             <span className={`badge ${isAlphaPositive ? 'badge-success' : 'badge-danger'}`}>
-              {isAlphaPositive ? 'Outperforming' : 'Underperforming'}
+              {isAlphaPositive ? 'Risk-adjusted outperform' : 'Risk-adjusted underperform'}
             </span>
           ) : (
-            'No benchmark comparison'
+            'Needs 1+ year of history'
           )}
         </div>
       </div>

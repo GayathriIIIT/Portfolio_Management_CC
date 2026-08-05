@@ -14,7 +14,6 @@ import { WhatIfPage } from './pages/WhatIfPage';
 import { PortfoliosPage } from './pages/PortfoliosPage';
 
 import { TradeModal } from './components/TradeModal';
-import { AddHoldingModal } from './components/AddHoldingModal';
 import { NewPortfolioModal } from './components/NewPortfolioModal';
 import { ManageCashModal } from './components/ManageCashModal';
 
@@ -30,7 +29,6 @@ export function AppContent() {
 
   // Modals
   const [tradeModal, setTradeModal] = useState({ isOpen: false, type: 'BUY', symbol: '' });
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isNewPortfolioModalOpen, setIsNewPortfolioModalOpen] = useState(false);
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
 
@@ -147,7 +145,6 @@ export function AppContent() {
                   analytics={analytics}
                   onOpenTradeModal={handleOpenTradeModal}
                   onDeleteHolding={handleDeleteHolding}
-                  onOpenAddModal={() => setIsAddModalOpen(true)}
                   onOpenCashModal={() => setIsCashModalOpen(true)}
                 />
               )}
@@ -158,7 +155,6 @@ export function AppContent() {
                   analytics={analytics}
                   onOpenTradeModal={handleOpenTradeModal}
                   onDeleteHolding={handleDeleteHolding}
-                  onOpenAddModal={() => setIsAddModalOpen(true)}
                   onOpenCashModal={() => setIsCashModalOpen(true)}
                 />
               )}
@@ -200,13 +196,6 @@ export function AppContent() {
         initialType={tradeModal.type}
         initialSymbol={tradeModal.symbol}
         onTradeSuccess={loadPortfolioData}
-      />
-
-      <AddHoldingModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        portfolioId={selectedPortfolioId}
-        onSuccess={loadPortfolioData}
       />
 
       <NewPortfolioModal

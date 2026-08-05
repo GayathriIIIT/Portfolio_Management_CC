@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, ArrowLeftRight, Search, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from './TickerAutocomplete';
+import { rememberTicker } from '../services/tickerCache';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
@@ -106,6 +107,7 @@ export function TradeModal({
       }
 
       setSuccessMsg(`${txnType} order executed successfully!`);
+      rememberTicker(sym);
       if (isBrainrot) {
         showToast(
           txnType === 'BUY' ? 'buy-dance.gif' : 'sell-dance.gif',
@@ -123,7 +125,10 @@ export function TradeModal({
     }
   };
 
-  const totalCost = (Number(price) || 0) * (Number(quantity) || 0) + (Number(fees) || 0);
+  const tradeTotal = (Number(price) || 0) * (Number(quantity) || 0);
+  const feeValue = Number(fees || 0);
+  // SELL fees reduce the proceeds received; BUY fees add to the cost.
+  const totalCost = txnType === 'SELL' ? tradeTotal - feeValue : tradeTotal + feeValue;
 
   return (
     <div className="modal-overlay" onClick={onClose}>

@@ -22,6 +22,40 @@ class UnknownTickerError(ValueError):
     """Raised when yfinance has no usable data for a symbol."""
 
 
+def _parse_cash_symbol(symbol):
+    """If `symbol` looks like a cash symbol (`USD-CASH`, `EUR-CASH`), return the
+    currency code (e.g. `USD`). Returns None for any real ticker."""
+    if not isinstance(symbol, str) or not symbol.strip():
+        return None
+    upper = symbol.strip().upper()
+    if upper.endswith("-CASH") and len(upper) > len("-CASH"):
+        ccy = upper[: -len("-CASH")]
+        if len(ccy) == 3 and ccy.isalpha():
+            return ccy
+    return None
+
+
+def _is_cash_symbol(symbol):
+    return _parse_cash_symbol(symbol) is not None
+
+
+def _cash_quote(symbol):
+    """Synthetic quote for a cash symbol (`{CCY}-CASH`): always 1.0 per unit.
+
+    Cash is never sent to Yahoo Finance — a cash position is priced at its face
+    value, so we short-circuit at every service boundary."""
+    ccy = _parse_cash_symbol(symbol)
+    if ccy is None:
+        return None
+    return {
+        "price": 1.0,
+        "name": f"{ccy} Cash",
+        "exchange": None,
+        "currency": ccy,
+        "sector": "CASH",
+    }
+
+
 def _fetch_price(ticker, symbol):
     """Best-effort current price lookup.
 
@@ -55,7 +89,15 @@ def _fetch_quote(symbol):
     Yahoo or parse its response (rate limiting, network errors, unknown
     symbols) is normalized to a single `UnknownTickerError` so callers only
     need to handle one failure mode.
+
+    Cash symbols (e.g. `USD-CASH`) are never sent to Yahoo: a cash position is
+    always priced at its face value (1.0 per unit), so this returns a synthetic
+    quote instead of resolving an imaginary ticker.
     """
+    ccy = _parse_cash_symbol(symbol)
+    if ccy is not None:
+        return _cash_quote(symbol)
+
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         ticker = yf.Ticker(symbol)
 
@@ -78,6 +120,43 @@ def _fetch_quote(symbol):
         "exchange": info.get("exchange"),
         "currency": info.get("currency") or "USD",
         "sector": info.get("sector"),
+    }
+
+
+def _fetch_fundamentals(symbol):
+    """Best-effort fundamental snapshot for `symbol` from yfinance `ticker.info`.
+
+    Returns a dict of valuation/quality fields, or ``None`` on any failure.
+    The fields are picked for the recommendation engine (P/E, P/B, dividend
+    yield, margins) plus a market-cap sanity check, and are deliberately
+    defensive: every field can be missing, so callers should use ``.get()``.
+    """
+    ccy = _parse_cash_symbol(symbol)
+    if ccy is not None:
+        return None
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            ticker = yf.Ticker(symbol)
+            info = ticker.info or {}
+    except Exception:
+        return None
+
+    def _num(key):
+        try:
+            value = info.get(key)
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "market_cap": _num("marketCap"),
+        "trailing_pe": _num("trailingPE"),
+        "forward_pe": _num("forwardPE"),
+        "price_to_book": _num("priceToBook"),
+        "dividend_yield": _num("dividendYield"),  # fraction (0.02 = 2%)
+        "profit_margin": _num("profitMargins"),   # fraction (0.12 = 12%)
+        "trailing_eps": _num("trailingEps"),
     }
 
 
@@ -256,6 +335,42 @@ def _format_chart_points(history):
     return points
 
 
+def collect_daily_closes(symbol, start_date, end_date):
+    """Return `{date: close}` daily closing prices for a symbol from `start_date`
+    to `end_date` (both `date` objects, inclusive).
+
+    Used to reconstruct a portfolio's historical NAV series for risk metrics.
+    Best effort: symbols/date ranges with no usable data yield an empty dict.
+    """
+    import math
+
+    ticker = yf.Ticker(symbol)
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            history = ticker.history(start=start_str, end=end_str, interval="1d", auto_adjust=False)
+    except Exception:
+        return {}
+
+    closes = {}
+    for timestamp, row in history.iterrows():
+        price = row.get("Close")
+        if price is None:
+            continue
+        try:
+            price_f = float(price)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(price_f) or math.isinf(price_f):
+            continue
+        ts = _coerce_utc_datetime(timestamp)
+        if ts is None:
+            continue
+        closes[ts.date()] = price_f
+    return closes
+
+
 def collect_and_store_price_series(symbol, security_id, range_key="1d", db_session=None):
     """Collect a chart-ready price series for the given range.
 
@@ -341,6 +456,9 @@ class MarketPriceService:
 
     def _get_or_refresh(self, symbol):
         symbol = symbol.upper()
+        cash = _cash_quote(symbol)
+        if cash is not None:
+            return cash
         entry = self._cache.get(symbol)
         if entry is not None and self._is_fresh(entry):
             return entry
@@ -394,6 +512,30 @@ class MarketPriceService:
         self._cache[symbol] = entry
         return entry
 
+    def get_fundamentals(self, symbol, ttl_seconds=3600):
+        """Best-effort fundamental snapshot for `symbol` from yfinance `ticker.info`.
+
+        Returns a dict of valuation/quality fields (see ``_fetch_fundamentals``)
+        or ``None`` on any failure/cash symbol. Thanksgiving: crumbs are much
+        slower to change than prices, so the entry is cached for ~1h instead of
+        the 60s price TTL. Callers must treat ``None`` as "no fundamentals".
+        """
+        symbol = symbol.upper()
+        cash = _parse_cash_symbol(symbol)
+        if cash is not None:
+            return None
+
+        key = f"FUND_{symbol}"
+        entry = self._cache.get(key)
+        if entry is not None:
+            age = (datetime.now(timezone.utc) - entry["fetched_at"]).total_seconds()
+            if age < ttl_seconds:
+                return entry["data"]
+
+        data = _fetch_fundamentals(symbol)
+        self._cache[key] = {"data": data, "fetched_at": datetime.now(timezone.utc)}
+        return data
+
     def get_current_price(self, symbol):
         return self._get_or_refresh(symbol)["price"]
 
@@ -429,5 +571,8 @@ def fetch_realtime_quote(symbol):
     """Force a fresh yfinance fetch bypassing the service cache.
 
     Returns the same dict as `_fetch_quote` or raises `UnknownTickerError`.
-    """
+    Cash symbols short-circuit to their synthetic quote."""
+    cash = _cash_quote(symbol)
+    if cash is not None:
+        return cash
     return _fetch_quote(symbol)

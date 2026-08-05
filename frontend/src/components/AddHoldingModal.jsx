@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, PlusCircle, AlertCircle, CheckCircle } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from './TickerAutocomplete';
+import { rememberTicker } from '../services/tickerCache';
 
 export function AddHoldingModal({ isOpen, onClose, portfolioId, onSuccess }) {
   const [symbol, setSymbol] = useState('');
@@ -41,6 +42,7 @@ export function AddHoldingModal({ isOpen, onClose, portfolioId, onSuccess }) {
       });
 
       setSuccessMsg('Position added to portfolio successfully!');
+      rememberTicker(sym);
       setTimeout(() => {
         onSuccess();
         onClose();

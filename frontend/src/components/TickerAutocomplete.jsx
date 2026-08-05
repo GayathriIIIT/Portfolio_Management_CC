@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getRecentTickers, rememberTicker } from '../services/tickerCache';
 
 export const POPULAR_SUGGESTIONS = [
   { symbol: 'AAPL', name: 'Apple Inc.' },
@@ -29,11 +30,31 @@ export const POPULAR_SUGGESTIONS = [
 export function TickerAutocomplete({ value, onChange, placeholder, style, className, required = false }) {
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  const filtered = POPULAR_SUGGESTIONS.filter(
-    (item) =>
-      item.symbol.startsWith(value.toUpperCase()) ||
-      item.name.toLowerCase().includes(value.toLowerCase())
-  ).slice(0, 5);
+  // Remembered tickers (from earlier successful trades/holdings) take
+  // precedence, then the built-in popular list. This way a symbol like "AA"
+  // that a user has used before keeps showing up as a suggestion.
+  const knownTickers = [];
+  const seen = new Set();
+  for (const t of getRecentTickers()) {
+    const sym = String(t.symbol).toUpperCase();
+    if (seen.has(sym)) continue;
+    seen.add(sym);
+    knownTickers.push({ symbol: sym, name: t.name || '' });
+  }
+  for (const t of POPULAR_SUGGESTIONS) {
+    if (seen.has(t.symbol)) continue;
+    seen.add(t.symbol);
+    knownTickers.push(t);
+  }
+
+  const query = value.toUpperCase().trim();
+  const filtered = knownTickers
+    .filter(
+      (item) =>
+        item.symbol.startsWith(query) ||
+        (item.name && item.name.toLowerCase().includes(value.toLowerCase()))
+    )
+    .slice(0, 5);
 
   return (
     <div style={{ position: 'relative', flex: 1 }}>
@@ -70,6 +91,12 @@ export function TickerAutocomplete({ value, onChange, placeholder, style, classN
             <div
               key={item.symbol}
               onClick={() => {
+                // Remember the symbol the user actually typed (e.g. "AA"), not
+                // just the resolved suggestion (e.g. "AAPL"), so re-entering
+                // "AA" surfaces "AA" in the recent-ticker cache too.
+                if (value && value.toUpperCase().trim() !== item.symbol.toUpperCase()) {
+                  rememberTicker(value.toUpperCase().trim());
+                }
                 onChange(item.symbol);
                 setShowSuggestions(false);
               }}
