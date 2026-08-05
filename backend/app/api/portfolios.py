@@ -1015,6 +1015,70 @@ def _compute_jensen_alpha(portfolio, base_curr):
     return metrics.get("jensen_alpha")
 
 
+def _portfolio_fundamentals(portfolio, base_curr="USD"):
+    """Value-weighted fundamental snapshot of the portfolio's non-cash holdings.
+
+    Best-effort: any holding whose quote/fundamentals can't be resolved is
+    skipped, and ``None`` is returned when nothing usable exists. The weighted
+    P/E, dividend yield, market cap and top-sector concentration feed the
+    recommendation engine's valuation & concentration signals.
+    """
+    fx = _price_service()
+    total_mv = 0.0
+    pe_num = pe_den = 0.0
+    dy_num = dy_den = 0.0
+    mcap_num = 0.0
+    sector_mv = {}
+
+    for holding in portfolio.holdings:
+        if holding.security.type == "CASH":
+            continue
+        symbol = holding.security.symbol
+        try:
+            price = fx.get_current_price(symbol)
+            rate = fx.get_fx_rate(holding.security.currency or "USD", base_curr)
+        except Exception:
+            continue
+        mv = float(holding.quantity) * float(price) * rate
+        if mv <= 0:
+            continue
+        total_mv += mv
+        sector = holding.security.sector or "Other"
+        sector_mv[sector] = sector_mv.get(sector, 0.0) + mv
+        try:
+            fund = fx.get_fundamentals(symbol) or {}
+        except Exception:
+            fund = {}
+        pe = fund.get("trailing_pe")
+        if pe and float(pe) > 0:
+            pe_num += float(pe) * mv
+            pe_den += mv
+        dy = fund.get("dividend_yield")
+        if dy is not None:
+            dy_num += float(dy) * mv
+            dy_den += mv
+        mcap = fund.get("market_cap")
+        if mcap:
+            mcap_num += float(mcap) * mv
+
+    if total_mv <= 0:
+        return None
+
+    top_sector = None
+    top_sector_pct = 0.0
+    if sector_mv:
+        top_sector = max(sector_mv, key=sector_mv.get)
+        top_sector_pct = sector_mv[top_sector] / total_mv * 100.0
+
+    return {
+        "weighted_pe": round(pe_num / pe_den, 2) if pe_den else None,
+        "dividend_yield": round(dy_num / dy_den, 4) if dy_den else None,
+        "market_cap": round(mcap_num / total_mv, 0) if total_mv else None,
+        "top_sector": top_sector,
+        "top_sector_pct": round(top_sector_pct, 2),
+    }
+
+
 @bp.get("/<int:portfolio_id>/analytics/chart")
 def get_portfolio_chart_data(portfolio_id):
     portfolio = _get_portfolio_or_404(portfolio_id)
@@ -1098,6 +1162,7 @@ def get_portfolio_risk(portfolio_id):
         "benchmark": "SPY",
         "range": range_key,
         "since": since,
+        "message": None,
     }
 
     # Never hit the network during tests (which mock yfinance only for the price
@@ -1112,8 +1177,20 @@ def get_portfolio_risk(portfolio_id):
     nav, _d0, external_flows = _reconstruct_nav_series(
         portfolio, lookback_days=lookback_days, start_date=start_date
     )
-    if not nav or len(nav) < 3:
-        return jsonify(empty_response)
+
+    # Value-based metrics (total return, max drawdown, best/worst day, daily
+    # volatility) come straight from the first/last NAV values and are always
+    # meaningful — even a same-day "since last trade" window reports the current
+    # value at 0% return. Risk-family metrics (annualized, Sharpe, beta, alpha)
+    # stay gated inside compute_risk_metrics by sufficient_history, so a short
+    # window simply leaves them None instead of blanking the whole card.
+    if not nav:
+        response = dict(empty_response)
+        response["message"] = (
+            "The portfolio has no transactions to measure yet — add a deposit "
+            "and a buy, then check back after it builds up some price history."
+        )
+        return jsonify(response)
 
     # Benchmark (SPY) daily closes over the same window, forward-filled and
     # aligned to the NAV dates so beta/correlation/capture line up with the
@@ -1141,12 +1218,13 @@ def get_portfolio_risk(portfolio_id):
 
     recommendation = None
     try:
-        analytics = _compute_portfolio_metrics(portfolio)
+        fundamentals = _portfolio_fundamentals(portfolio, base_curr=portfolio.base_currency or "USD")
         recommendation = generate_recommendation(
             metrics,
             alpha=metrics.get("jensen_alpha"),
-            xirr=analytics.get("xirr"),
-            profit_loss_percentage=analytics.get("profit_loss_percentage"),
+            xirr=metrics.get("annualized_return"),
+            profit_loss_percentage=metrics.get("total_return"),
+            fundamentals=fundamentals,
         )
     except Exception:
         recommendation = None
@@ -1240,11 +1318,27 @@ def get_stock_analytics():
     if stock_ret is not None and spy_ret is not None:
         alpha = round(stock_ret - spy_ret, 4)
 
+    # Single-stock view also supplies valuation context to the recommendation.
+    fund = None
+    try:
+        info = market_price_service.get_fundamentals(symbol) or {}
+    except Exception:
+        info = {}
+    pe = info.get("trailing_pe")
+    dy = info.get("dividend_yield")
+    fund = {
+        "weighted_pe": round(float(pe), 2) if pe and float(pe) > 0 else None,
+        "dividend_yield": float(dy) if dy is not None else None,
+        "top_sector": None,
+        "top_sector_pct": 0.0,
+    }
+
     recommendation = generate_recommendation(
         metrics,
         alpha=alpha,
         xirr=metrics.get("annualized_return"),
         profit_loss_percentage=metrics.get("total_return"),
+        fundamentals=fund,
     )
 
     name = None

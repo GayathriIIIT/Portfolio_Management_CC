@@ -123,6 +123,43 @@ def _fetch_quote(symbol):
     }
 
 
+def _fetch_fundamentals(symbol):
+    """Best-effort fundamental snapshot for `symbol` from yfinance `ticker.info`.
+
+    Returns a dict of valuation/quality fields, or ``None`` on any failure.
+    The fields are picked for the recommendation engine (P/E, P/B, dividend
+    yield, margins) plus a market-cap sanity check, and are deliberately
+    defensive: every field can be missing, so callers should use ``.get()``.
+    """
+    ccy = _parse_cash_symbol(symbol)
+    if ccy is not None:
+        return None
+
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            ticker = yf.Ticker(symbol)
+            info = ticker.info or {}
+    except Exception:
+        return None
+
+    def _num(key):
+        try:
+            value = info.get(key)
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "market_cap": _num("marketCap"),
+        "trailing_pe": _num("trailingPE"),
+        "forward_pe": _num("forwardPE"),
+        "price_to_book": _num("priceToBook"),
+        "dividend_yield": _num("dividendYield"),  # fraction (0.02 = 2%)
+        "profit_margin": _num("profitMargins"),   # fraction (0.12 = 12%)
+        "trailing_eps": _num("trailingEps"),
+    }
+
+
 def get_historical_price(symbol, trade_date, price_type="close"):
     """Fetch an Open, Close, High, or Low price for a symbol on a specific calendar date."""
     if isinstance(trade_date, datetime):
@@ -474,6 +511,30 @@ class MarketPriceService:
         entry = {**quote, "fetched_at": datetime.now(timezone.utc)}
         self._cache[symbol] = entry
         return entry
+
+    def get_fundamentals(self, symbol, ttl_seconds=3600):
+        """Best-effort fundamental snapshot for `symbol` from yfinance `ticker.info`.
+
+        Returns a dict of valuation/quality fields (see ``_fetch_fundamentals``)
+        or ``None`` on any failure/cash symbol. Thanksgiving: crumbs are much
+        slower to change than prices, so the entry is cached for ~1h instead of
+        the 60s price TTL. Callers must treat ``None`` as "no fundamentals".
+        """
+        symbol = symbol.upper()
+        cash = _parse_cash_symbol(symbol)
+        if cash is not None:
+            return None
+
+        key = f"FUND_{symbol}"
+        entry = self._cache.get(key)
+        if entry is not None:
+            age = (datetime.now(timezone.utc) - entry["fetched_at"]).total_seconds()
+            if age < ttl_seconds:
+                return entry["data"]
+
+        data = _fetch_fundamentals(symbol)
+        self._cache[key] = {"data": data, "fetched_at": datetime.now(timezone.utc)}
+        return data
 
     def get_current_price(self, symbol):
         return self._get_or_refresh(symbol)["price"]

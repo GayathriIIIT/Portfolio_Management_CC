@@ -165,6 +165,79 @@ def test_risk_endpoint_smoke_testing_guard(client):
     assert body["benchmark"] == "SPY"
 
 
+def test_risk_endpoint_since_last_uses_jensen_alpha_for_recommendation(client, monkeypatch):
+    """The recommendation must read the CAPM alpha (Jensen's) rather than the
+    raw excess-return field that _compute_portfolio_metrics no longer computes."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Since"}).get_json()
+    pid = created["id"]
+    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post(
+        f"/api/portfolios/{pid}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    today = _date.today()
+    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
+    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
+    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # last trade
+    db.session.commit()
+
+    closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+    monkeypatch.setattr(portfolios_module, "get_risk_free_rate_pct", lambda: 4.0)
+    client.application.config["TESTING"] = False  # exercise the real reconstruction path
+
+    resp = client.get(f"/api/portfolios/{pid}/analytics/risk?since=last")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["since"] == "last"
+    assert body["metrics"] is not None
+    # The NAV window starts at the last trade date, so it holds no trades.
+    assert body["nav"] and len(body["nav"]) >= 2
+    assert body["nav"][0]["date"] == (today - _td(days=10)).isoformat()
+
+
+def test_risk_endpoint_since_last_when_trade_is_today(client, monkeypatch):
+    """A portfolio whose last trade landed today has no post-trade price
+    movement, but the view must still render: it reports the current value at a
+    0% total return instead of blanking the card entirely."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Today"}).get_json()
+    pid = created["id"]
+    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post(
+        f"/api/portfolios/{pid}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    today = _date.today()
+    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
+    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=5)   # deposit
+    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None)                  # trade today
+    db.session.commit()
+
+    closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+    monkeypatch.setattr(portfolios_module, "get_risk_free_rate_pct", lambda: 4.0)
+    client.application.config["TESTING"] = False  # exercise the real reconstruction path
+
+    resp = client.get(f"/api/portfolios/{pid}/analytics/risk?since=last")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    # A single-day window still yields price data + value metrics.
+    assert body["nav"] and len(body["nav"]) >= 1
+    assert body["metrics"] is not None
+    assert body["metrics"]["total_return"] == 0.0
+    assert body.get("message") is None
+
+
 def test_twr_removes_deposit_inflation_from_total_return():
     """A mid-window deposit must NOT surface as a gain in the total return.
 

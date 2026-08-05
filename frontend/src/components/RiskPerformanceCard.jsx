@@ -52,6 +52,7 @@ export function RiskPerformanceCard({ portfolioId }) {
   const [metrics, setMetrics] = useState(null);
   const [recommendation, setRecommendation] = useState(null);
   const [nav, setNav] = useState([]);
+  const [emptyMessage, setEmptyMessage] = useState(null);
 
   const effectiveRange = sinceLast ? 'all' : range;
 
@@ -68,6 +69,7 @@ export function RiskPerformanceCard({ portfolioId }) {
         setMetrics(res.metrics || null);
         setRecommendation(res.recommendation || null);
         setNav(res.nav || []);
+        setEmptyMessage(res.message || null);
       })
       .catch((err) => {
         if (isMounted) setError(err.message);
@@ -218,8 +220,12 @@ export function RiskPerformanceCard({ portfolioId }) {
         <div className="empty-state">
           <Activity className="empty-state-icon" />
           <div>
-            Not enough historical data to compute risk metrics yet. Add transactions and let
-            the portfolio build up some history.
+            {emptyMessage || (
+              <>
+                Not enough information yet — add transactions and let the portfolio build up
+                some history.
+              </>
+            )}
           </div>
         </div>
       ) : (
@@ -237,6 +243,26 @@ export function RiskPerformanceCard({ portfolioId }) {
                   <Line type="monotone" dataKey="value" stroke="var(--accent-primary)" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+          )}
+
+          {nav.length <= 1 && metrics && (
+            <div
+              style={{
+                marginBottom: '16px',
+                fontSize: '0.75rem',
+                color: 'var(--text-secondary)',
+                background: 'var(--bg-app)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '8px 12px',
+              }}
+            >
+              {sinceLast
+                ? 'The most recent trade is today, so there is no price movement yet — the value '
+                  + 'below reflects the current position. Check back after the market moves.'
+                : 'Almost no history in this window yet — value-based metrics below (total return, '
+                  + 'drawdown, best/worst day) reflect what data exists so far.'}
             </div>
           )}
 

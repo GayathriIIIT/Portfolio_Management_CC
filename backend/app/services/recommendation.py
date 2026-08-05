@@ -8,8 +8,16 @@ of forcing a buy/sell call on noise. This is educational, not financial advice.
 """
 
 
-def generate_recommendation(risk, alpha=None, xirr=None, profit_loss_percentage=None):
-    """Build an {action, label, tone, confidence, reasons, score, period_days} dict."""
+def generate_recommendation(risk, alpha=None, xirr=None, profit_loss_percentage=None,
+                            fundamentals=None):
+    """Build an {action, label, tone, confidence, reasons, score, period_days} dict.
+
+    ``fundamentals`` is an optional dict (see _portfolio_fundamentals) with
+    value-weighted portfolio valuation stats — weighted_pe, dividend_yield,
+    market_cap, top_sector/top_sector_pct — used for valuation & concentration
+    signals that risk metrics can't capture. When omitted, only the
+    risk/performance signals are evaluated.
+    """
     if not risk:
         return _result("INSUFFICIENT_DATA", "Not enough data", "neutral",
                        ["No risk metrics are available yet, so no recommendation can be made."], "low", 0, 0)
@@ -70,6 +78,31 @@ def generate_recommendation(risk, alpha=None, xirr=None, profit_loss_percentage=
     if profit_loss_percentage is not None and profit_loss_percentage <= -20.0:
         score -= 1
         reasons.append(f"Portfolio is down {profit_loss_percentage:.1f}% overall")
+
+    if fundamentals:
+        pe = fundamentals.get("weighted_pe")
+        if pe is not None and pe > 0:
+            if pe >= 28:
+                score -= 1
+                reasons.append(f"Valuation is stretched (weighted P/E {pe:.1f}) — growth may be priced in")
+            elif pe <= 14:
+                score += 1
+                reasons.append(f"Valuation is attractive (weighted P/E {pe:.1f}) — cheap relative to earnings")
+
+        dy = fundamentals.get("dividend_yield")
+        if dy is not None and dy > 0:
+            dy_pct = dy * 100.0
+            if dy_pct >= 3.0:
+                score += 1
+                reasons.append(f"Healthy dividend income (~{dy_pct:.1f}% yield) cushions drawdowns")
+            elif dy_pct < 0.5:
+                reasons.append(f"Low dividend yield ({dy_pct:.1f}%) — little income support in a downturn")
+
+        conc = fundamentals.get("top_sector_pct")
+        if conc is not None and conc >= 40.0:
+            score -= 1
+            reasons.append(f"Concentrated in {fundamentals.get('top_sector') or 'one sector'} "
+                           f"({conc:.0f}% of holdings) — concentration risk")
 
     if not reasons:
         if period_days < 30:
