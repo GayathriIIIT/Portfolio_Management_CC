@@ -44,7 +44,7 @@ function NAVTooltip({ active, payload }) {
   );
 }
 
-export function RiskPerformanceCard({ portfolioId }) {
+export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
   const [range, setRange] = useState('all');
   const [sinceLast, setSinceLast] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -81,7 +81,7 @@ export function RiskPerformanceCard({ portfolioId }) {
     return () => {
       isMounted = false;
     };
-  }, [portfolioId, effectiveRange, sinceLast]);
+  }, [portfolioId, effectiveRange, sinceLast, refreshKey]);
 
   return (
     <div className="card" style={{ marginBottom: '28px' }}>

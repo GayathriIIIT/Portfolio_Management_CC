@@ -29,7 +29,7 @@ const BENCHMARKS = [
   { id: 'NONE', label: 'None' },
 ];
 
-function CustomTooltip({ active, payload, label }) {
+function CustomTooltip({ active, payload, label, currency }) {
   if (active && payload && payload.length) {
     const assetPoint = payload.find((p) => p.dataKey === 'price');
     const benchPoint = payload.find((p) => p.dataKey === 'benchmarkReturn');
@@ -37,7 +37,7 @@ function CustomTooltip({ active, payload, label }) {
     const formattedVal = assetPoint
       ? new Intl.NumberFormat('en-US', {
           style: 'currency',
-          currency: 'USD',
+          currency: currency || 'USD',
         }).format(assetPoint.value)
       : null;
 
@@ -65,7 +65,7 @@ function CustomTooltip({ active, payload, label }) {
   return null;
 }
 
-export function PerformanceChart({ portfolioId }) {
+export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD' }) {
   const [range, setRange] = useState('1m');
   const [benchmark, setBenchmark] = useState('SPY');
   const [loading, setLoading] = useState(false);
@@ -110,7 +110,7 @@ export function PerformanceChart({ portfolioId }) {
     return () => {
       isMounted = false;
     };
-  }, [portfolioId, range, benchmark]);
+  }, [portfolioId, range, benchmark, refreshKey]);
 
   // Derive active series data and merge benchmark data
   const activeSeries = seriesList.find((s) => s.symbol === selectedSymbol);
@@ -325,7 +325,7 @@ export function PerformanceChart({ portfolioId }) {
                   domain={['auto', 'auto']}
                 />
               )}
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip currency={currency} />} />
               <Area
                 yAxisId="left"
                 type="monotone"

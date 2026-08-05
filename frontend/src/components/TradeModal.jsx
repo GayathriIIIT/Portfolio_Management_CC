@@ -6,10 +6,20 @@ import { rememberTicker } from '../services/tickerCache';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
+const formatWallet = (val) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(val);
+
 export function TradeModal({
   isOpen,
   onClose,
   portfolioId,
+  holdings = [],
+  walletBalance = 0,
   initialType = 'BUY',
   initialSymbol = '',
   onTradeSuccess,
@@ -67,6 +77,14 @@ export function TradeModal({
 
   if (!isOpen) return null;
 
+  const sym = symbol.trim().toUpperCase();
+  const ownedQty = holdings.find(
+    (h) =>
+      h.symbol === sym &&
+      h.type !== 'CASH' &&
+      !String(h.symbol || '').toUpperCase().endsWith('-CASH')
+  )?.quantity;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -86,6 +104,23 @@ export function TradeModal({
       }
       if (isNaN(feeVal) || feeVal < 0) {
         throw new Error('Brokerage fee must be a non-negative number');
+      }
+      if (txnType === 'SELL' && ownedQty != null && qty > ownedQty) {
+        throw new Error(
+          `Cannot sell ${qty} shares — you only own ${ownedQty} shares of ${sym}`
+        );
+      }
+      if (txnType === 'BUY' && price) {
+        const priceVal = Number(price);
+        if (isNaN(priceVal) || priceVal <= 0) {
+          throw new Error('Execution price must be a positive number');
+        }
+        const buyTotal = priceVal * qty + feeVal;
+        if (buyTotal > walletBalance) {
+          throw new Error(
+            `Insufficient wallet balance. Order total: $${buyTotal.toFixed(2)}, Available: $${walletBalance.toFixed(2)}`
+          );
+        }
       }
 
       const payload = {
@@ -130,6 +165,8 @@ export function TradeModal({
   const feeValue = Number(fees || 0);
   // SELL fees reduce the proceeds received; BUY fees add to the cost.
   const totalCost = txnType === 'SELL' ? tradeTotal - feeValue : tradeTotal + feeValue;
+  const insufficientWallet =
+    txnType === 'BUY' && price && totalCost > walletBalance;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -214,10 +251,19 @@ export function TradeModal({
           {/* Quantity & Price */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div className="form-group">
-              <label className="form-label">Quantity (Shares)</label>
+              <label className="form-label">
+                Quantity (Shares)
+                {txnType === 'SELL' && ownedQty != null && (
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: '500' }}>
+                    {' '}
+                    · Owned: {ownedQty}
+                  </span>
+                )}
+              </label>
               <input
                 type="number"
                 min="1"
+                max={txnType === 'SELL' && ownedQty != null ? ownedQty : undefined}
                 step="1"
                 className="form-input"
                 value={quantity}
@@ -262,14 +308,29 @@ export function TradeModal({
               border: '1px solid var(--border-color)',
               marginBottom: '20px',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
+              flexDirection: 'column',
+              gap: '8px',
             }}
           >
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Total Estimated {txnType}:</span>
-            <span style={{ fontWeight: '700', fontSize: '1.1rem', color: 'var(--text-primary)' }}>
-              ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                {txnType === 'SELL' ? 'Wallet after sale (estimated):' : 'Available in Wallet:'}
+              </span>
+              <span style={{ fontWeight: '700', fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                {formatWallet(walletBalance + (txnType === 'SELL' ? totalCost : 0))}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '8px' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Total Estimated {txnType}:</span>
+              <span style={{ fontWeight: '700', fontSize: '1.1rem', color: insufficientWallet ? 'var(--danger-text)' : 'var(--text-primary)' }}>
+                ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+            {insufficientWallet && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--danger-text)', fontWeight: '600' }}>
+                This order exceeds your wallet balance — add funds before buying.
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>

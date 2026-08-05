@@ -19,17 +19,10 @@ export function AssetAllocationChart({ holdings = [] }) {
     );
   }
 
-  // Cash is a separate balance, not an investable security: keep it out of the
-  // allocation ring (it would otherwise show up as a "USD-CASH" slice) and
-  // report it as a distinct total alongside the securities.
-  const cashHoldings = holdings.filter(
-    (h) => h.type === 'CASH' || String(h.symbol || '').toUpperCase().endsWith('-CASH')
-  );
-  const investHoldings = holdings.filter(
-    (h) => !(h.type === 'CASH' || String(h.symbol || '').toUpperCase().endsWith('-CASH'))
-  );
-
-  const totalCash = cashHoldings.reduce((sum, h) => sum + (Number(h.market_value) || 0), 0);
+  // A portfolio's cash holding (a {CCY}-CASH position) is part of the portfolio,
+  // so it is included here like any other holding. The user-level WALLET is
+  // separate and never reaches this chart.
+  const investHoldings = holdings;
 
   // Aggregate market value by Symbol (securities only)
   const dataMap = {};
@@ -117,27 +110,6 @@ export function AssetAllocationChart({ holdings = [] }) {
         </div>
       ) : (
         <div className="empty-state">No investable securities to display allocation.</div>
-      )}
-
-      {totalCash > 0 && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: '10px 14px',
-            fontSize: '0.85rem',
-            backgroundColor: 'var(--bg-app)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <span style={{ color: 'var(--text-secondary)', fontWeight: '600' }}>Cash balance (held separately)</span>
-          <span style={{ color: 'var(--accent-primary)', fontWeight: '800' }}>
-            ${totalCash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </span>
-        </div>
       )}
     </div>
   );

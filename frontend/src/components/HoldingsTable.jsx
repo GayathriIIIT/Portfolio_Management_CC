@@ -21,13 +21,10 @@ export function HoldingsTable({
       (h.name && h.name.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  // Cash is a first-class balance, not a security: pull {CCY}-CASH positions out
-  // of the securities table and show them as one aggregated cash component.
-  const isCashHolding = (h) =>
-    h.type === 'CASH' || String(h.symbol || '').toUpperCase().endsWith('-CASH');
-  const cashHoldings = filteredHoldings.filter(isCashHolding);
-  const securityHoldings = filteredHoldings.filter((h) => !isCashHolding(h));
-  const totalCash = cashHoldings.reduce((sum, h) => sum + (Number(h.market_value) || 0), 0);
+  // The portfolio may hold a {CCY}-CASH position as part of itself — it counts
+  // toward the portfolio's value and shows in the table below. (The user-level
+  // WALLET is separate and lives in the top bar, never as a holding.)
+  const filteredRows = filteredHoldings;
 
   const formatCurrency = (val) => {
     return new Intl.NumberFormat('en-US', {
@@ -87,44 +84,12 @@ export function HoldingsTable({
         </div>
       </div>
 
-      {!securityHoldings.length && !cashHoldings.length ? (
+      {!filteredRows.length ? (
         <div className="empty-state">
           <DollarSign className="empty-state-icon" />
           <div>No holdings found in this portfolio. Head to the Trade page to buy a position.</div>
         </div>
       ) : (
-        <>
-          {cashHoldings.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '12px',
-                flexWrap: 'wrap',
-                padding: '12px 16px',
-                marginBottom: '14px',
-                backgroundColor: 'var(--bg-app)',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border-color)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <DollarSign size={18} style={{ color: 'var(--accent-primary)' }} />
-                <div>
-                  <div style={{ fontWeight: '700', fontSize: '0.95rem' }}>Cash Balance</div>
-                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>
-                    {cashHoldings.map((c) => c.symbol.replace('-CASH', '')).join(', ')} — held separately from securities
-                  </div>
-                </div>
-              </div>
-              <div style={{ fontWeight: '800', fontSize: '1.15rem', color: 'var(--accent-primary)' }}>
-                {formatCurrency(totalCash)}
-              </div>
-            </div>
-          )}
-
-          {securityHoldings.length > 0 && (
         <div className="table-container">
           <table className="data-table">
             <thead>
@@ -141,7 +106,7 @@ export function HoldingsTable({
               </tr>
             </thead>
             <tbody>
-              {securityHoldings.map((h) => {
+              {filteredRows.map((h) => {
                 const isGain = (h.unrealized_pl || 0) >= 0;
                 const isCagrGain = (h.cagr || 0) >= 0;
                 const isCash = String(h.symbol || '').toUpperCase().endsWith('-CASH');
@@ -245,8 +210,6 @@ export function HoldingsTable({
             </tbody>
           </table>
         </div>
-          )}
-        </>
       )}
     </div>
   );

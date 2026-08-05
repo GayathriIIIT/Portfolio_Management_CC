@@ -251,6 +251,37 @@ body {
   gap: 12px;
 }
 
+/* Global wallet pill in the top bar — user-level, shared across portfolios */
+.wallet-pill {
+  background: var(--bg-card);
+  border: 1px solid var(--accent-primary);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.wallet-pill:hover {
+  background: var(--bg-card-hover);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.wallet-pill-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.wallet-pill-value {
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
 /* Theme Toggle Switch */
 .theme-toggle-btn {
   background: var(--bg-card);

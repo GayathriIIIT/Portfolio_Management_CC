@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, DollarSign, CheckCircle, AlertCircle } from 'lucide-react';
+import { X, Wallet, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 
-export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = 'USD', onSuccess }) {
+export function WalletModal({ isOpen, onClose, currency = 'USD', onSuccess }) {
   const [actionType, setActionType] = useState('DEPOSIT');
   const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState(baseCurrency);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -15,9 +14,8 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
       setAmount('');
       setError(null);
       setSuccessMsg(null);
-      setCurrency(baseCurrency);
     }
-  }, [isOpen, baseCurrency]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -30,20 +28,16 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
     try {
       const amtVal = Number(amount);
       if (isNaN(amtVal) || amtVal <= 0) {
-        throw new Error('Cash amount must be a positive number');
+        throw new Error('Amount must be a positive number');
       }
 
-      const payload = {
-        amount: amtVal,
-        currency: currency,
-      };
-
+      const payload = { amount: amtVal, currency };
       if (actionType === 'DEPOSIT') {
-        await api.depositCash(portfolioId, payload);
-        setSuccessMsg(`Added $${amtVal.toFixed(2)} of cash to this portfolio!`);
+        await api.depositWallet(payload);
+        setSuccessMsg(`Successfully added $${amtVal.toFixed(2)} to your wallet!`);
       } else {
-        await api.withdrawCash(portfolioId, payload);
-        setSuccessMsg(`Removed $${amtVal.toFixed(2)} of cash from this portfolio!`);
+        await api.withdrawWallet(payload);
+        setSuccessMsg(`Successfully withdrew $${amtVal.toFixed(2)} from your wallet!`);
       }
 
       setTimeout(() => {
@@ -62,8 +56,8 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} className="modal-title">
-            <DollarSign size={20} style={{ color: 'var(--accent-primary)' }} />
-            <span>Manage Cash</span>
+            <Wallet size={20} style={{ color: 'var(--accent-primary)' }} />
+            <span>Manage Wallet</span>
           </div>
           <button className="modal-close" onClick={onClose}>
             <X size={20} />
@@ -85,7 +79,11 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
         )}
 
         <form onSubmit={handleSubmit}>
-          {/* Action Tabs */}
+          <p className="kpi-subtext" style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>
+            Your wallet is shared across all of your portfolios and funds every buy.
+            It is separate from any cash you hold inside a portfolio.
+          </p>
+
           <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
             <button
               type="button"
@@ -93,7 +91,7 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
               style={{ flex: 1 }}
               onClick={() => setActionType('DEPOSIT')}
             >
-              Add Cash
+              Deposit
             </button>
             <button
               type="button"
@@ -101,12 +99,12 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
               style={{ flex: 1 }}
               onClick={() => setActionType('WITHDRAW')}
             >
-              Remove Cash
+              Withdraw
             </button>
           </div>
 
           <div className="form-group">
-            <label className="form-label">Amount ($)</label>
+            <label className="form-label">Amount ({currency})</label>
             <input
               type="number"
               step="0.01"
@@ -116,17 +114,6 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               required
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Currency</label>
-            <input
-              type="text"
-              className="form-input"
-              value={currency}
-              readOnly
-              title="Cash is held inside the portfolio in its base currency"
             />
           </div>
 

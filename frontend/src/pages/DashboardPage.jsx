@@ -8,6 +8,7 @@ import { HoldingsTable } from '../components/HoldingsTable';
 export function DashboardPage({
   portfolio,
   analytics,
+  refreshKey = 0,
   onOpenTradeModal,
   onDeleteHolding,
   onOpenCashModal,
@@ -35,11 +36,11 @@ export function DashboardPage({
       <KPICards analytics={analytics} currency={portfolio.base_currency} />
 
       {/* Risk & Performance */}
-      <RiskPerformanceCard portfolioId={portfolio.id} />
+      <RiskPerformanceCard portfolioId={portfolio.id} refreshKey={refreshKey} />
 
       {/* Charts Grid */}
       <div className="grid-2">
-        <PerformanceChart portfolioId={portfolio.id} />
+        <PerformanceChart portfolioId={portfolio.id} currency={portfolio.base_currency} refreshKey={refreshKey} />
         <AssetAllocationChart holdings={analytics?.holdings || []} />
       </div>
 

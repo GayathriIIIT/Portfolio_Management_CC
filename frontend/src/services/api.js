@@ -60,6 +60,11 @@ export const api = {
   depositCash: (portfolioId, payload) => request(`${API_BASE}/${portfolioId}/deposit`, { method: 'POST', body: payload }),
   withdrawCash: (portfolioId, payload) => request(`${API_BASE}/${portfolioId}/withdraw`, { method: 'POST', body: payload }),
 
+  // Global wallet (user-level, shared across every portfolio)
+  getWallet: () => request('/api/wallet'),
+  depositWallet: (payload) => request('/api/wallet/deposit', { method: 'POST', body: payload }),
+  withdrawWallet: (payload) => request('/api/wallet/withdraw', { method: 'POST', body: payload }),
+
   // Ledger / Transactions History
   getTransactions: (portfolioId) => request(`${API_BASE}/${portfolioId}/transactions`),
 

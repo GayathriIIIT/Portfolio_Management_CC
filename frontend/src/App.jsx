@@ -17,6 +17,7 @@ import { TradeModal } from './components/TradeModal';
 import { AddHoldingModal } from './components/AddHoldingModal';
 import { NewPortfolioModal } from './components/NewPortfolioModal';
 import { ManageCashModal } from './components/ManageCashModal';
+import { WalletModal } from './components/WalletModal';
 
 // How often the dashboard auto-refreshes live prices (2 minutes).
 const LIVE_REFRESH_MS = 2 * 60 * 1000;
@@ -32,6 +33,12 @@ export function AppContent() {
   const [loading, setLoading] = useState(true);
   const [isPortfolioLoading, setIsPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState(null);
+
+  // Bumped after every successful in-place data refresh so presentational
+  // children that fetch on their own (PerformanceChart, RiskPerformanceCard)
+  // re-fetch after a trade — portfolioId alone never changes on a trade, so
+  // they would otherwise keep showing pre-trade numbers until a reload.
+  const [dataVersion, setDataVersion] = useState(0);
 
   // Tracks the portfolio the UI is currently meant to show. Async responses
   // whose portfolio no longer matches are discarded, so switching away from a
@@ -49,6 +56,22 @@ export function AppContent() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isNewPortfolioModalOpen, setIsNewPortfolioModalOpen] = useState(false);
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
+
+  // Global wallet — user-level, shared across every portfolio. Fetched once and
+  // refreshed after any trade or wallet change. Never part of a portfolio.
+  const [wallet, setWallet] = useState({});
+
+  const loadWallet = useCallback(async () => {
+    try {
+      const data = await api.getWallet();
+      const byCurrency = {};
+      for (const w of data) byCurrency[w.currency] = w.balance;
+      setWallet(byCurrency);
+    } catch (err) {
+      console.error('Failed to load wallet:', err);
+    }
+  }, []);
 
   // Fetch all portfolios
   const loadPortfolios = useCallback(async () => {
@@ -71,6 +94,10 @@ export function AppContent() {
   useEffect(() => {
     loadPortfolios();
   }, [loadPortfolios]);
+
+  useEffect(() => {
+    loadWallet();
+  }, [loadWallet]);
 
   // Fetch active portfolio details & analytics when selected portfolio changes
   const loadPortfolioData = useCallback(async () => {
@@ -124,15 +151,24 @@ export function AppContent() {
       if (pid !== selectedPortfolioIdRef.current) return; // stale response
       setActivePortfolio(portfolioRes);
       setAnalytics(analyticsRes);
+      loadWallet();
+      // Signal self-fetching children (charts, risk card) that portfolio data
+      // changed so they refetch instead of holding stale pre-trade numbers.
+      setDataVersion((v) => v + 1);
     } catch (err) {
       console.error('Failed to refresh portfolio data:', err);
     }
-  }, [selectedPortfolioId]);
+  }, [selectedPortfolioId, loadWallet]);
 
-  // Refresh live prices from Yahoo Finance
+  // Refresh live prices from Yahoo Finance. Self-guards against overlapping
+  // calls via refreshInFlight, so a manual click and the 2-minute auto timer
+  // can never run two concurrent refreshes (they'd waste an API call and make
+  // isRefreshing flip in a confusing order).
   const handleRefreshPrices = useCallback(async () => {
     const pid = selectedPortfolioId;
     if (!pid) return;
+    if (refreshInFlight.current) return; // a refresh is already running
+    refreshInFlight.current = true;
     setIsRefreshing(true);
     try {
       const res = await api.refreshPortfolioPrices(pid);
@@ -145,22 +181,18 @@ export function AppContent() {
     } catch (err) {
       console.error('Failed to refresh prices:', err);
     } finally {
-      if (pid === selectedPortfolioIdRef.current) {
-        setIsRefreshing(false);
-      }
+      setIsRefreshing(false);
+      refreshInFlight.current = false;
     }
   }, [selectedPortfolioId, refreshPortfolioData]);
 
   // Auto-refresh live prices every 2 minutes on the main dashboard so the
-  // Portfolio Value KPI stays current without needing the manual button.
+  // Portfolio Value KPI stays current without needing the manual button. The
+  // handler self-guards against overlap, so no extra flag is needed here.
   useEffect(() => {
     if (activeTab !== 'dashboard' || !selectedPortfolioId) return;
     const timer = setInterval(() => {
-      if (refreshInFlight.current) return;
-      refreshInFlight.current = true;
-      handleRefreshPrices().finally(() => {
-        refreshInFlight.current = false;
-      });
+      handleRefreshPrices();
     }, LIVE_REFRESH_MS);
     return () => clearInterval(timer);
   }, [activeTab, selectedPortfolioId, handleRefreshPrices]);
@@ -187,6 +219,11 @@ export function AppContent() {
     });
   };
 
+  // The wallet is user-level; the balance shown is the currency this portfolio
+  // trades in (its base currency), since buys/sells draw from that same pool.
+  const walletCurrency = activePortfolio?.base_currency || 'USD';
+  const walletBalance = wallet[walletCurrency] ?? 0;
+
   return (
     <div className="app-container">
       {/* Multi-page Sidebar Navigation */}
@@ -204,6 +241,12 @@ export function AppContent() {
           onSelectPortfolio={setSelectedPortfolioId}
           onRefreshPrices={handleRefreshPrices}
           onOpenNewPortfolioModal={() => setIsNewPortfolioModalOpen(true)}
+          onOpenWalletModal={() => {
+            setIsCashModalOpen(false);
+            setIsWalletModalOpen(true);
+          }}
+          walletBalance={walletBalance}
+          walletCurrency={walletCurrency}
           isRefreshing={isRefreshing}
         />
 
@@ -232,10 +275,14 @@ export function AppContent() {
                     <DashboardPage
                       portfolio={activePortfolio}
                       analytics={analytics}
+                      refreshKey={dataVersion}
                       onOpenTradeModal={handleOpenTradeModal}
                       onDeleteHolding={handleDeleteHolding}
                       onOpenAddModal={() => setIsAddModalOpen(true)}
-                      onOpenCashModal={() => setIsCashModalOpen(true)}
+                      onOpenCashModal={() => {
+                        setIsWalletModalOpen(false);
+                        setIsCashModalOpen(true);
+                      }}
                     />
                   )}
 
@@ -246,13 +293,17 @@ export function AppContent() {
                       onOpenTradeModal={handleOpenTradeModal}
                       onDeleteHolding={handleDeleteHolding}
                       onOpenAddModal={() => setIsAddModalOpen(true)}
-                      onOpenCashModal={() => setIsCashModalOpen(true)}
+                      onOpenCashModal={() => {
+                        setIsWalletModalOpen(false);
+                        setIsCashModalOpen(true);
+                      }}
                     />
                   )}
 
               {activeTab === 'trade' && (
                 <TradePage
                   portfolio={activePortfolio}
+                  walletBalance={walletBalance}
                   onTradeSuccess={refreshPortfolioData}
                 />
               )}
@@ -276,6 +327,8 @@ export function AppContent() {
         isOpen={tradeModal.isOpen}
         onClose={() => setTradeModal({ isOpen: false, type: 'BUY', symbol: '' })}
         portfolioId={selectedPortfolioId}
+        holdings={activePortfolio?.holdings || []}
+        walletBalance={walletBalance}
         initialType={tradeModal.type}
         initialSymbol={tradeModal.symbol}
         onTradeSuccess={refreshPortfolioData}
@@ -298,7 +351,18 @@ export function AppContent() {
         isOpen={isCashModalOpen}
         onClose={() => setIsCashModalOpen(false)}
         portfolioId={selectedPortfolioId}
+        baseCurrency={activePortfolio?.base_currency || 'USD'}
         onSuccess={refreshPortfolioData}
+      />
+
+      <WalletModal
+        isOpen={isWalletModalOpen}
+        onClose={() => setIsWalletModalOpen(false)}
+        currency={walletCurrency}
+        onSuccess={() => {
+          loadWallet();
+          refreshPortfolioData();
+        }}
       />
     </div>
   );

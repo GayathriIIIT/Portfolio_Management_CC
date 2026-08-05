@@ -24,7 +24,6 @@ export const POPULAR_SUGGESTIONS = [
   { symbol: 'BNDX', name: 'Vanguard Total International Bond ETF' },
   { symbol: 'SCHO', name: 'Schwab Short-Term U.S. Treasury ETF' },
   { symbol: 'US10Y-2030', name: 'US 10Y Note 2030' },
-  { symbol: 'USD-CASH', name: 'US Dollar Cash' },
 ];
 
 export function TickerAutocomplete({ value, onChange, placeholder, style, className, required = false }) {

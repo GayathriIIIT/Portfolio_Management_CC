@@ -32,7 +32,8 @@ export function KPICards({ analytics, currency = 'USD' }) {
   return (
     <div className="kpi-wrap">
     <div className="grid-4" style={{ marginBottom: '28px' }}>
-      {/* 1. Total Portfolio Value */}
+      {/* 1. Total Portfolio Value (includes any cash holding the portfolio holds)
+          — the wallet is kept separate and shown in the top bar, never here. */}
       <div className="card kpi-card">
         <div className="kpi-header">
           <span>Portfolio Value</span>

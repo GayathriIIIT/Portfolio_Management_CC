@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign, Activity } from 'lucide-react';
+import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign, Activity, Wallet } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { rememberTicker } from '../services/tickerCache';
@@ -7,7 +7,7 @@ import { HoldingAnalyticsPanel } from '../components/HoldingAnalyticsPanel';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
-export function TradePage({ portfolio, onTradeSuccess }) {
+export function TradePage({ portfolio, walletBalance = 0, onTradeSuccess }) {
   const { isBrainrot } = useTheme();
   const { showToast } = useBrainrotToast();
   const [symbol, setSymbol] = useState('');
@@ -116,6 +116,18 @@ export function TradePage({ portfolio, onTradeSuccess }) {
           throw new Error(`Cannot sell ${qty} shares. Only ${owned.quantity} shares available.`);
         }
       }
+      if (txnType === 'BUY' && price) {
+        const priceVal = Number(price);
+        if (isNaN(priceVal) || priceVal <= 0) {
+          throw new Error('Execution price must be a positive number');
+        }
+        const buyTotal = priceVal * qty + feeVal;
+        if (buyTotal > walletBalance) {
+          throw new Error(
+            `Insufficient wallet balance. Order total: $${buyTotal.toFixed(2)}, Available: $${walletBalance.toFixed(2)}`
+          );
+        }
+      }
 
       const payload = {
         symbol: sym,
@@ -200,6 +212,28 @@ export function TradePage({ portfolio, onTradeSuccess }) {
           <div style={{ fontWeight: '700', fontSize: '1.15rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <ArrowLeftRight size={20} style={{ color: 'var(--accent-primary)' }} />
             <span>Place Trade Order</span>
+          </div>
+
+          {/* Wallet — the tradeable cash pool every BUY draws from and every SELL pays into */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 16px',
+              marginBottom: '16px',
+              backgroundColor: 'var(--accent-light)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid rgba(37, 99, 235, 0.2)',
+            }}
+          >
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: '700' }}>
+              <Wallet size={14} style={{ verticalAlign: 'middle', marginRight: 6, color: 'var(--accent-primary)' }} />
+              Wallet (available buying power):
+            </span>
+            <span style={{ fontWeight: '800', fontSize: '1.05rem', color: 'var(--accent-primary)' }}>
+              ${walletBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
           </div>
 
           {error && (
@@ -343,7 +377,7 @@ export function TradePage({ portfolio, onTradeSuccess }) {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Order Price ($)</label>
+                <label className="form-label">Order Price</label>
                 <input
                   type="number"
                   step="0.01"
@@ -462,7 +496,7 @@ export function TradePage({ portfolio, onTradeSuccess }) {
                         <span style={{ fontWeight: '700', fontSize: '0.95rem' }}>{t.symbol}</span>
                       </div>
                       <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                        {t.quantity} shares @ ${t.price} (Fee: ${t.fees})
+                        {t.quantity} shares @ ${Number(t.price || 0).toFixed(2)} (Fee: ${Number(t.fees || 0).toFixed(2)})
                       </div>
                     </div>
 

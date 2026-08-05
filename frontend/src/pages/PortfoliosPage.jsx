@@ -26,9 +26,13 @@ export function PortfoliosPage({
   };
 
   const saveEdit = async (id) => {
+    if (!editName || !editName.trim()) {
+      alert('Portfolio name cannot be empty');
+      return;
+    }
     try {
       await api.updatePortfolio(id, {
-        name: editName,
+        name: editName.trim(),
         base_currency: editCurrency,
       });
       setEditingId(null);
