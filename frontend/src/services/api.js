@@ -41,9 +41,9 @@ export const api = {
   getPortfolioAnalytics: (id) => request(`${API_BASE}/${id}/analytics`),
   getPortfolioChartData: (id, range = '1m', benchmark = 'SPY') =>
     request(`${API_BASE}/${id}/analytics/chart?range=${range}&benchmark=${encodeURIComponent(benchmark)}`),
-  getPortfolioRisk: (id, range = 'all', since = '') => {
+  getPortfolioRisk: (id, range = 'all', includeCash = true) => {
     const params = new URLSearchParams({ range });
-    if (since) params.set('since', since);
+    params.set('include_cash', includeCash);
     return request(`${API_BASE}/${id}/analytics/risk?${params.toString()}`);
   },
   refreshPortfolioPrices: (id, payload = {}) => request(`${API_BASE}/${id}/refresh-prices`, { method: 'POST', body: payload }),

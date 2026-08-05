@@ -168,26 +168,34 @@ def test_risk_endpoint_smoke_testing_guard(client):
     assert body["benchmark"] == "SPY"
 
 
-def test_risk_endpoint_since_last_uses_jensen_alpha_for_recommendation(client, monkeypatch):
-    """The recommendation must read the CAPM alpha (Jensen's) rather than the
-    raw excess-return field that _compute_portfolio_metrics no longer computes."""
-    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+def _make_portfolio_with_buy(client, name, days_back=10, wallet=1000.0, symbol="AAPL"):
+    """Create a portfolio, fund the wallet, buy a security, and backdate the
+    ledger BUY so NAV reconstruction spans a real window."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
-    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Since"}).get_json()
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": name}).get_json()
     pid = created["id"]
-    client.post("/api/wallet/deposit", json={"amount": 1000.0})
+    if wallet:
+        client.post("/api/wallet/deposit", json={"amount": wallet, "currency": "USD"})
     client.post(
         f"/api/portfolios/{pid}/holdings",
-        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+        json={"symbol": symbol, "quantity": 10, "purchase_price": 100.0},
     )
+    if days_back is not None:
+        txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
+        txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=days_back)
+        db.session.commit()
+    return pid
 
+
+def test_risk_endpoint_include_cash_returns_include_cash(client, monkeypatch):
+    """The endpoint echoes the include_cash flag and reports metrics. The
+    recommendation reads the CAPM alpha (Jensen's) rather than a raw excess
+    return field that _compute_portfolio_metrics no longer computes."""
+    from datetime import date as _date, timedelta as _td
+
+    pid = _make_portfolio_with_buy(client, "IncCash", days_back=10)
     today = _date.today()
-    # Only the add-position BUY is in the portfolio ledger; the wallet deposit
-    # lives elsewhere, so backdate the BUY to be the "last trade" 10 days ago.
-    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
-    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
-    db.session.commit()
-
     closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}
     monkeypatch.setattr(
         portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
@@ -195,52 +203,42 @@ def test_risk_endpoint_since_last_uses_jensen_alpha_for_recommendation(client, m
     monkeypatch.setattr(portfolios_module, "get_risk_free_rate_pct", lambda: 4.0)
     client.application.config["TESTING"] = False  # exercise the real reconstruction path
 
-    resp = client.get(f"/api/portfolios/{pid}/analytics/risk?since=last")
+    resp = client.get(f"/api/portfolios/{pid}/analytics/risk?include_cash=true&range=all")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["since"] == "last"
+    assert body["include_cash"] is True
     assert body["metrics"] is not None
-    # The NAV window starts at the last trade date, so it holds no trades.
     assert body["nav"] and len(body["nav"]) >= 2
-    assert body["nav"][0]["date"] == (today - _td(days=10)).isoformat()
 
 
-def test_risk_endpoint_since_last_when_trade_is_today(client, monkeypatch):
-    """A portfolio whose last trade landed today has no post-trade price
-    movement, but the view must still render: it reports the current value at a
-    0% total return instead of blanking the card entirely."""
-    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+def test_risk_endpoint_include_cash_false_excludes_cash_component(client, monkeypatch):
+    """include_cash=false must drop the portfolio's cash holding from the NAV —
+    the securities-only value rides below the all-in value, and the difference
+    is exactly the parked cash component."""
+    from datetime import date as _date, timedelta as _td
 
-    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Today"}).get_json()
-    pid = created["id"]
-    client.post("/api/wallet/deposit", json={"amount": 1000.0})
-    client.post(
-        f"/api/portfolios/{pid}/holdings",
-        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
-    )
+    # Deposit to the wallet (to fund it) then park cash in the portfolio.
+    pid = _make_portfolio_with_buy(client, "CashExcl", days_back=10)
+    client.post("/api/wallet/deposit", json={"amount": 5000.0, "currency": "USD"})
+    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 3000.0, "currency": "USD"})
 
     today = _date.today()
-    # Only the add-position BUY is in the portfolio ledger; backdate it to today
-    # so the "since last transaction" window has no post-trade price movement.
-    txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
-    txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None)
-    db.session.commit()
-
-    closes = {(today - _td(days=i)): 150.0 - i * 0.5 for i in range(31)}
+    closes = {(today - _td(days=i)): 190.0 - i * 0.5 for i in range(31)}
     monkeypatch.setattr(
         portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
     )
     monkeypatch.setattr(portfolios_module, "get_risk_free_rate_pct", lambda: 4.0)
-    client.application.config["TESTING"] = False  # exercise the real reconstruction path
+    client.application.config["TESTING"] = False
 
-    resp = client.get(f"/api/portfolios/{pid}/analytics/risk?since=last")
-    assert resp.status_code == 200
-    body = resp.get_json()
-    # A single-day window still yields price data + value metrics.
-    assert body["nav"] and len(body["nav"]) >= 1
-    assert body["metrics"] is not None
-    assert body["metrics"]["total_return"] == 0.0
-    assert body.get("message") is None
+    all_in = client.get(f"/api/portfolios/{pid}/analytics/risk?include_cash=true").get_json()
+    sec_only = client.get(f"/api/portfolios/{pid}/analytics/risk?include_cash=false").get_json()
+    assert all_in["include_cash"] is True
+    assert sec_only["include_cash"] is False
+
+    all_last = all_in["nav"][-1]["value"]
+    sec_last = sec_only["nav"][-1]["value"]
+    # The parked $3000 cash component separates the two series.
+    assert all_last - sec_last == pytest.approx(3000.0, abs=0.01)
 
 
 def test_twr_removes_deposit_inflation_from_total_return():
@@ -264,12 +262,12 @@ def test_twr_removes_deposit_inflation_from_total_return():
     assert twr["best_day"] == pytest.approx(10.0, abs=1e-3)
 
 
-def test_nav_since_last_transaction_tracks_price_movement(client, monkeypatch):
-    """Window starting at the last transaction holds no trades, so the return is
-    pure price movement instead of an inflated buy/deposit-driven number."""
+def test_nav_start_date_window_tracks_price_movement(client, monkeypatch):
+    """A window starting on a given date holds no earlier trades, so the return
+    is pure price movement instead of an inflated buy/deposit-driven number."""
     from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
 
-    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Since"}).get_json()
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Window"}).get_json()
     pid = created["id"]
     client.post("/api/wallet/deposit", json={"amount": 1000.0})
     client.post(
@@ -278,8 +276,7 @@ def test_nav_since_last_transaction_tracks_price_movement(client, monkeypatch):
     )
 
     today = _date.today()
-    # Only the add-position BUY is in the portfolio ledger; backdate it 10 days
-    # so the "since last transaction" window has a clean start.
+    # Backdate the BUY 10 days so the lookback window has a clean start.
     txn = PortfolioTransaction.query.filter_by(portfolio_id=pid).first()
     txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)
     db.session.commit()
@@ -291,7 +288,7 @@ def test_nav_since_last_transaction_tracks_price_movement(client, monkeypatch):
 
     portfolio = Portfolio.query.get(pid)
     last_date = today - _td(days=10)
-    nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio, start_date=last_date)
+    nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio, lookback_days=10)
     assert nav and len(nav) >= 2
 
     window_first = nav[0]["value"]

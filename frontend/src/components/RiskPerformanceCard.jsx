@@ -8,7 +8,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { Gauge, Activity, Clock } from 'lucide-react';
+import { Gauge, Activity, DollarSign } from 'lucide-react';
 import { api } from '../services/api';
 import { RecommendationBanner, MetricGrid } from './riskWidgets';
 
@@ -46,15 +46,13 @@ function NAVTooltip({ active, payload }) {
 
 export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
   const [range, setRange] = useState('all');
-  const [sinceLast, setSinceLast] = useState(false);
+  const [includeCash, setIncludeCash] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [recommendation, setRecommendation] = useState(null);
   const [nav, setNav] = useState([]);
   const [emptyMessage, setEmptyMessage] = useState(null);
-
-  const effectiveRange = sinceLast ? 'all' : range;
 
   useEffect(() => {
     if (!portfolioId) return;
@@ -63,7 +61,7 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
     setError(null);
 
     api
-      .getPortfolioRisk(portfolioId, effectiveRange, sinceLast ? 'last' : '')
+      .getPortfolioRisk(portfolioId, range, includeCash)
       .then((res) => {
         if (!isMounted) return;
         setMetrics(res.metrics || null);
@@ -81,7 +79,7 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
     return () => {
       isMounted = false;
     };
-  }, [portfolioId, effectiveRange, sinceLast, refreshKey]);
+  }, [portfolioId, range, includeCash, refreshKey]);
 
   return (
     <div className="card" style={{ marginBottom: '28px' }}>
@@ -116,20 +114,17 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
               {RANGES.map((r) => (
                 <button
                   key={r.id}
-                  onClick={() => {
-                    setRange(r.id);
-                    setSinceLast(false);
-                  }}
+                  onClick={() => setRange(r.id)}
                   style={{
-                    background: !sinceLast && range === r.id ? 'var(--bg-card)' : 'transparent',
-                    color: !sinceLast && range === r.id ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                    background: range === r.id ? 'var(--bg-card)' : 'transparent',
+                    color: range === r.id ? 'var(--accent-primary)' : 'var(--text-secondary)',
                     border: 'none',
                     padding: '4px 10px',
                     borderRadius: 'var(--radius-sm)',
-                    fontWeight: !sinceLast && range === r.id ? '600' : '500',
+                    fontWeight: range === r.id ? '600' : '500',
                     fontSize: '0.78rem',
                     cursor: 'pointer',
-                    boxShadow: !sinceLast && range === r.id ? 'var(--shadow-sm)' : 'none',
+                    boxShadow: range === r.id ? 'var(--shadow-sm)' : 'none',
                     transition: 'all 0.15s ease',
                   }}
                 >
@@ -139,26 +134,26 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
             </div>
             <button
               type="button"
-              onClick={() => setSinceLast((v) => !v)}
-              title="Measure the return from the last transaction to today — pure price movement, uninflated by deposits or trades"
+              onClick={() => setIncludeCash((v) => !v)}
+              title="Include or exclude the portfolio's cash component from the graph"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: sinceLast ? 'var(--accent-primary)' : 'var(--bg-app)',
-                color: sinceLast ? '#fff' : 'var(--text-secondary)',
+                background: includeCash ? 'var(--accent-primary)' : 'var(--bg-app)',
+                color: includeCash ? '#fff' : 'var(--text-secondary)',
                 border: '1px solid var(--border-color)',
                 padding: '5px 10px',
                 borderRadius: 'var(--radius-md)',
                 fontWeight: '600',
                 fontSize: '0.75rem',
                 cursor: 'pointer',
-                boxShadow: sinceLast ? 'var(--shadow-sm)' : 'none',
+                boxShadow: includeCash ? 'var(--shadow-sm)' : 'none',
                 transition: 'all 0.15s ease',
               }}
             >
-              <Clock size={13} />
-              Since last trade
+              <DollarSign size={13} />
+              Include Cash
             </button>
           </div>
 
@@ -171,7 +166,6 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
       </div>
 
       {metrics &&
-        !sinceLast &&
         range !== 'all' &&
         metrics.period_days < (RANGE_EXPECTED_DAYS[range] || 0) && (
           <div
@@ -191,7 +185,7 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
           </div>
         )}
 
-      {sinceLast && (
+      {!includeCash && (
         <div
           style={{
             marginBottom: '16px',
@@ -203,8 +197,7 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
             padding: '8px 12px',
           }}
         >
-          Window starts at the most recent transaction — no trades occurred inside it, so the
-          return reflects only price movement, not deposits or buy/sell flows.
+          Cash component is excluded — the graph shows only the market value of your securities.
         </div>
       )}
 
@@ -264,11 +257,8 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
                 padding: '8px 12px',
               }}
             >
-              {sinceLast
-                ? 'The most recent trade is today, so there is no price movement yet — the value '
-                  + 'below reflects the current position. Check back after the market moves.'
-                : 'Almost no history in this window yet — value-based metrics below (total return, '
-                  + 'drawdown, best/worst day) reflect what data exists so far.'}
+              Almost no history in this window yet — value-based metrics below (total return,
+              drawdown, best/worst day) reflect what data exists so far.
             </div>
           )}
 

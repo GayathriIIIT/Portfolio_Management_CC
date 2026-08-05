@@ -763,15 +763,18 @@ def _align_benchmark_returns(bench_closes, nav_points):
     return returns
 
 
-def _live_portfolio_value(portfolio, fx, base_curr):
+def _live_portfolio_value(portfolio, fx, base_curr, include_cash=True):
     """Live sum of current holding market values in the base currency.
 
     Mirrors the ``current_value`` the /analytics KPI reports: each holding is
     priced at its current live quote (CASH at face value) converted at the
-    current FX rate.
+    current FX rate. ``include_cash=False`` skips the portfolio's cash
+    component so the graph can show the securities-only value.
     """
     total = 0.0
     for h in portfolio.holdings:
+        if h.security.type == "CASH" and not include_cash:
+            continue
         sec_curr = h.security.currency or "USD"
         rate = fx.get_fx_rate(sec_curr, base_curr)
         qty = float(h.quantity)
@@ -786,7 +789,7 @@ def _live_portfolio_value(portfolio, fx, base_curr):
     return total
 
 
-def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
+def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None, include_cash=True):
     """Rebuild a daily portfolio NAV (value per calendar day, base currency).
 
     Replays the BUY/SELL/DEPOSIT/WITHDRAW ledger into running positions + cash,
@@ -800,14 +803,15 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
     Time-Weighted Return).
 
     Cash (the ``{CCY}-CASH`` position) is priced at a flat 1.0 and carried
-    alongside the holdings. The final series is anchored to the live
-    "Portfolio Value" / ``current_value`` KPI: it is uniformly scaled so its
-    latest point equals that value, keeping the graph consistent with the
-    dashboard while leaving every daily return unchanged. Unfunded BUYs (e.g. a
-    position added without a prior deposit) are funded with opening capital: the
-    running cash balance is offset so its cumulative minimum is zero, which
-    keeps every internal buy/sell value-neutral and the trade size out of the
-    daily returns.
+    alongside the holdings. ``include_cash=False`` drops that component so the
+    series shows securities only. The final series is anchored to the live
+    "Portfolio Value" / ``current_value`` KPI (securities-only when cash is
+    excluded): it is uniformly scaled so its latest point equals that value,
+    keeping the graph consistent with the dashboard while leaving every daily
+    return unchanged. Unfunded BUYs (e.g. a position added without a prior
+    deposit) are funded with opening capital: the running cash balance is offset
+    so its cumulative minimum is zero, which keeps every internal buy/sell
+    value-neutral and the trade size out of the daily returns.
 
     ``lookback_days`` caps the window to the trailing N calendar days (e.g. 31
     for "1M"). ``start_date`` (a ``date``) overrides the window start from the
@@ -933,8 +937,9 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
         # position) is priced at its face value (1.0), so adding the running
         # cash balance makes the series' latest value match the live Portfolio
         # Value KPI while excluding deposit/withdrawal jumps from returns via
-        # Time-Weighted Return (see get_portfolio_risk).
-        value = cash_balance
+        # Time-Weighted Return (see get_portfolio_risk). When the "include cash"
+        # toggle is off the cash component is dropped from the series.
+        value = cash_balance if include_cash else 0.0
         for hid, qty in positions.items():
             if qty <= 0:
                 continue
@@ -972,7 +977,7 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
     # the live quote. Uniformly scaling the series to end at current_value keeps
     # the graph's final number consistent with the dashboard KPI while
     # preserving every daily return (ratios are unchanged).
-    current_value = _live_portfolio_value(portfolio, fx, base_curr)
+    current_value = _live_portfolio_value(portfolio, fx, base_curr, include_cash=include_cash)
     last_value = nav_points[-1]["value"]
     if current_value > 0 and last_value > 0:
         scale = current_value / last_value
@@ -1138,31 +1143,10 @@ def get_portfolio_risk(portfolio_id):
         raise ApiError("'range' must be one of '1m', '3m', '6m', '1y', or 'all'", status_code=400)
     lookback_days = PORTFOLIO_RANGE_LOOKBACK[range_key]
 
-    # Optional "since last transaction" view: window starts at the most recent
-    # ledger row, so there are no trades inside the window and the return is
-    # pure price movement (a buy/sell-funded ~% jump can never inflate it).
-    since = request.args.get("since", "").strip().lower()
-    start_date = None
-    if since == "last":
-        # Anchor the window on the most recent BUY/SELL (not a later
-        # DEPOSIT/WITHDRAW), so the view measures pure price movement after the
-        # last trade. A deposit made after the last trade would otherwise pin the
-        # window to today's date and yield no usable data.
-        last_dt = (
-            PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
-            .filter(PortfolioTransaction.txn_type.in_(("BUY", "SELL")))
-            .order_by(PortfolioTransaction.executed_at.desc())
-            .first()
-        )
-        if last_dt is None:
-            last_dt = (
-                PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id)
-                .order_by(PortfolioTransaction.executed_at.desc())
-                .first()
-            )
-        if last_dt is not None:
-            start_date = _to_naive_utc(last_dt.executed_at).date()
-            lookback_days = None  # ignore the range selector; show since the last trade
+    # Whether the portfolio's cash component is included in the NAV graph. The
+    # frontend exposes an "include cash" toggle so the user can view securities
+    # only (defaults to including cash, matching the Portfolio Value KPI).
+    include_cash = request.args.get("include_cash", "true").strip().lower() in ("1", "true", "yes")
 
     empty_response = {
         "portfolio_id": portfolio.id,
@@ -1171,7 +1155,6 @@ def get_portfolio_risk(portfolio_id):
         "nav": [],
         "benchmark": "SPY",
         "range": range_key,
-        "since": since,
         "message": None,
     }
 
@@ -1185,15 +1168,15 @@ def get_portfolio_risk(portfolio_id):
         rf = float(current_app.config.get("RISK_FREE_RATE", 4.0))
 
     nav, _d0, external_flows = _reconstruct_nav_series(
-        portfolio, lookback_days=lookback_days, start_date=start_date
+        portfolio, lookback_days=lookback_days, include_cash=include_cash
     )
 
     # Value-based metrics (total return, max drawdown, best/worst day, daily
     # volatility) come straight from the first/last NAV values and are always
-    # meaningful — even a same-day "since last trade" window reports the current
-    # value at 0% return. Risk-family metrics (annualized, Sharpe, beta, alpha)
-    # stay gated inside compute_risk_metrics by sufficient_history, so a short
-    # window simply leaves them None instead of blanking the whole card.
+    # meaningful — even a same-day window reports the current value at 0%
+    # return. Risk-family metrics (annualized, Sharpe, beta, alpha) stay gated
+    # inside compute_risk_metrics by sufficient_history, so a short window
+    # simply leaves them None instead of blanking the whole card.
     if not nav:
         response = dict(empty_response)
         response["message"] = (
@@ -1247,7 +1230,7 @@ def get_portfolio_risk(portfolio_id):
             "nav": nav,
             "benchmark": "SPY",
             "range": range_key,
-            "since": since,
+            "include_cash": include_cash,
         }
     )
 
@@ -1989,58 +1972,76 @@ def _adjust_cash(portfolio, currency, amount, direction):
     Used by both the deposit/withdraw endpoints and the buy/sell endpoints when
     the user trades a cash symbol directly. Cash is always stored at an `avg_cost`
     of 1.0 and carries no brokerage fees.
+
+    The global wallet mirrors every movement: a deposit (or buying cash) debits
+    the wallet so cash never appears from nothing, and a withdrawal (or selling
+    cash) credits the proceeds back to it. Both the holding update and the wallet
+    change commit or roll back together.
     """
     currency = (currency or "USD").upper()
     symbol = f"{currency}-CASH"
 
-    security = Security.query.filter_by(symbol=symbol).first()
-    if security is None:
-        security = Security(
-            symbol=symbol,
-            name=f"{currency} Cash",
-            type="CASH",
-            currency=currency,
-            interest_rate=0.045,
-        )
-        db.session.add(security)
-        db.session.flush()
-
-    holding = SecurityHolding.query.filter_by(
-        portfolio_id=portfolio.id, security_id=security.id
-    ).first()
-
-    if direction == "withdraw":
-        if holding is None or float(holding.quantity) < amount:
-            raise ApiError("Insufficient cash balance for withdrawal", status_code=400)
-        new_qty = float(holding.quantity) - amount
-        if new_qty <= 0:
-            db.session.delete(holding)
-        else:
-            holding.quantity = new_qty
-        txn_type = "WITHDRAW"
-    else:
-        if holding is None:
-            holding = SecurityHolding(
-                portfolio_id=portfolio.id,
-                security_id=security.id,
-                quantity=amount,
-                avg_cost=1.0,
+    try:
+        wallet = _ensure_wallet(currency)
+        if direction != "withdraw" and float(wallet.balance) < amount:
+            raise ApiError(
+                f"Insufficient wallet balance. Deposit total: ${amount:.2f}, Available: ${float(wallet.balance):.2f}",
+                status_code=400,
             )
-            db.session.add(holding)
-        else:
-            holding.quantity = float(holding.quantity) + amount
-        txn_type = "DEPOSIT"
 
-    transaction = PortfolioTransaction(
-        portfolio_id=portfolio.id,
-        security_id=security.id,
-        txn_type=txn_type,
-        quantity=amount,
-        price=1.0,
-        fees=0.0,
-        executed_at=datetime.now(timezone.utc),
-    )
-    db.session.add(transaction)
-    db.session.commit()
+        security = Security.query.filter_by(symbol=symbol).first()
+        if security is None:
+            security = Security(
+                symbol=symbol,
+                name=f"{currency} Cash",
+                type="CASH",
+                currency=currency,
+                interest_rate=0.045,
+            )
+            db.session.add(security)
+            db.session.flush()
+
+        holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=security.id
+        ).first()
+
+        if direction == "withdraw":
+            if holding is None or float(holding.quantity) < amount:
+                raise ApiError("Insufficient cash balance for withdrawal", status_code=400)
+            new_qty = float(holding.quantity) - amount
+            if new_qty <= 0:
+                db.session.delete(holding)
+            else:
+                holding.quantity = new_qty
+            txn_type = "WITHDRAW"
+            wallet.balance = float(wallet.balance) + amount
+        else:
+            if holding is None:
+                holding = SecurityHolding(
+                    portfolio_id=portfolio.id,
+                    security_id=security.id,
+                    quantity=amount,
+                    avg_cost=1.0,
+                )
+                db.session.add(holding)
+            else:
+                holding.quantity = float(holding.quantity) + amount
+            txn_type = "DEPOSIT"
+            wallet.balance = float(wallet.balance) - amount
+
+        transaction = PortfolioTransaction(
+            portfolio_id=portfolio.id,
+            security_id=security.id,
+            txn_type=txn_type,
+            quantity=amount,
+            price=1.0,
+            fees=0.0,
+            executed_at=datetime.now(timezone.utc),
+        )
+        db.session.add(transaction)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
     return holding, transaction
 

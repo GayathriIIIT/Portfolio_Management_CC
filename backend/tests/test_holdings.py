@@ -143,8 +143,10 @@ def test_delete_holding(client):
 
 def test_delete_cash_holding_rejected(client):
     # The portfolio's own cash component (a {CCY}-CASH holding) is integral to
-    # the portfolio; fund it through the per-portfolio deposit endpoint.
+    # the portfolio; fund it through the per-portfolio deposit endpoint, which
+    # moves money out of the global wallet.
     portfolio = _create_portfolio(client)
+    client.post("/api/wallet/deposit", json={"amount": 2000.0, "currency": "USD"})
     client.post(
         f"/api/portfolios/{portfolio['id']}/deposit",
         json={"amount": 1000.0, "currency": "USD"},
@@ -157,6 +159,42 @@ def test_delete_cash_holding_rejected(client):
 
     holdings = client.get(f"/api/portfolios/{portfolio['id']}/holdings").get_json()
     assert any(h["symbol"] == "USD-CASH" for h in holdings)
+
+
+def test_portfolio_deposit_requires_wallet_funds(client):
+    """Depositing cash moves money out of the wallet — with no wallet balance the
+    deposit must be rejected rather than creating cash from nothing."""
+    portfolio = _create_portfolio(client)
+    resp = client.post(
+        f"/api/portfolios/{portfolio['id']}/deposit",
+        json={"amount": 1000.0, "currency": "USD"},
+    )
+    assert resp.status_code == 400
+    assert "Insufficient wallet balance" in resp.get_json()["error"]
+
+    holdings = client.get(f"/api/portfolios/{portfolio['id']}/holdings").get_json()
+    assert not any(h["symbol"] == "USD-CASH" for h in holdings)
+
+
+def test_portfolio_deposit_debits_and_withdraw_credits_wallet(client):
+    """A portfolio deposit draws from the wallet; withdrawing it puts the money
+    back, keeping the wallet and the portfolio's cash component in sync."""
+    portfolio = _create_portfolio(client)
+    client.post("/api/wallet/deposit", json={"amount": 5000.0, "currency": "USD"})
+
+    client.post(
+        f"/api/portfolios/{portfolio['id']}/deposit",
+        json={"amount": 1000.0, "currency": "USD"},
+    )
+    wallet = client.get("/api/wallet").get_json()
+    assert next(w for w in wallet if w["currency"] == "USD")["balance"] == 4000.0
+
+    client.post(
+        f"/api/portfolios/{portfolio['id']}/withdraw",
+        json={"amount": 1000.0, "currency": "USD"},
+    )
+    wallet = client.get("/api/wallet").get_json()
+    assert next(w for w in wallet if w["currency"] == "USD")["balance"] == 5000.0
 
 
 def test_portfolio_total_value_reflects_holdings(client):
