@@ -3,6 +3,7 @@
 from flask import Blueprint, current_app, jsonify, request
 
 from app.api.errors import ApiError, NotFoundError
+from app.api.wallet import _ensure_wallet, _get_wallet
 from app.extensions import db
 from app.models import Portfolio, PortfolioTransaction, Security, SecurityHolding, WhatifPrice
 from app.services import market_price_service
@@ -296,6 +297,13 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
     profit_loss = current_value - invested_value
     profit_loss_percentage = (profit_loss / invested_value * 100) if invested_value else 0.0
 
+    # Wallet = the tradeable cash pool, reported separately from the securities.
+    # It backs every BUY and absorbs every SELL; the frontend shows it at the top
+    # of the dashboard and in the trade box instead of as a portfolio holding.
+    cash_balance = sum(
+        float(h["market_value"]) for h in holdings if h["type"] == "CASH"
+    )
+
     # Calculate XIRR and Benchmark Alpha
     xirr = None
     alpha = None
@@ -397,6 +405,7 @@ def _compute_portfolio_metrics(portfolio, override_prices=None):
         "base_currency": base_curr,
         "invested_value": invested_value,
         "current_value": current_value,
+        "cash_balance": cash_balance,
         "profit_loss": profit_loss,
         "profit_loss_percentage": profit_loss_percentage,
         "xirr": xirr,
@@ -1612,60 +1621,61 @@ def add_holding(portfolio_id):
     purchase_price = _require_positive_number(payload, "purchase_price")
     total_cost = purchase_price * quantity
 
-    # Adjust cash balance if cash position exists
-    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
-    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
-    if cash_sec is not None:
-        cash_holding = SecurityHolding.query.filter_by(
-            portfolio_id=portfolio.id, security_id=cash_sec.id
+    try:
+        # Debit the user's global wallet. The wallet is shared across portfolios
+        # and funds every buy; a portfolio with no wallet funds has a zero
+        # balance, so it can never buy for free.
+        wallet = _ensure_wallet(portfolio.base_currency)
+        avail_cash = float(wallet.balance)
+        if avail_cash < total_cost:
+            raise ApiError(
+                f"Insufficient wallet balance. Order total: ${total_cost:.2f}, Available: ${avail_cash:.2f}",
+                status_code=400,
+            )
+        wallet.balance = avail_cash - total_cost
+
+        security = _get_or_create_security(symbol)
+        holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=security.id
         ).first()
-        if cash_holding is not None:
-            avail_cash = float(cash_holding.quantity)
-            if avail_cash < total_cost:
-                raise ApiError(
-                    f"Insufficient cash balance. Order total: ${total_cost:.2f}, Available cash: ${avail_cash:.2f}",
-                    status_code=400,
-                )
-            cash_holding.quantity = avail_cash - total_cost
 
-    security = _get_or_create_security(symbol)
-    holding = SecurityHolding.query.filter_by(
-        portfolio_id=portfolio.id, security_id=security.id
-    ).first()
+        if holding is None:
+            holding = SecurityHolding(
+                portfolio_id=portfolio.id,
+                security_id=security.id,
+                quantity=quantity,
+                avg_cost=purchase_price,
+                first_purchased_at=datetime.now(timezone.utc),
+            )
+            db.session.add(holding)
+        else:
+            existing_qty = float(holding.quantity)
+            existing_cost = float(holding.avg_cost)
+            total_qty = existing_qty + quantity
+            holding.avg_cost = (
+                (existing_qty * existing_cost) + (quantity * purchase_price)
+            ) / total_qty
+            holding.quantity = total_qty
 
-    if holding is None:
-        holding = SecurityHolding(
-            portfolio_id=portfolio.id,
-            security_id=security.id,
-            quantity=quantity,
-            avg_cost=purchase_price,
-            first_purchased_at=datetime.now(timezone.utc),
+        # Record the purchase in the ledger too, so transaction history and the
+        # portfolio-level XIRR / per-holding CAGR stay consistent with "Add Position".
+        db.session.add(
+            PortfolioTransaction(
+                portfolio_id=portfolio.id,
+                security_id=security.id,
+                txn_type="BUY",
+                quantity=quantity,
+                price=purchase_price,
+                fees=0.0,
+                executed_at=datetime.now(timezone.utc),
+            )
         )
-        db.session.add(holding)
-    else:
-        existing_qty = float(holding.quantity)
-        existing_cost = float(holding.avg_cost)
-        total_qty = existing_qty + quantity
-        holding.avg_cost = (
-            (existing_qty * existing_cost) + (quantity * purchase_price)
-        ) / total_qty
-        holding.quantity = total_qty
 
-    # Record the purchase in the ledger too, so transaction history and the
-    # portfolio-level XIRR / per-holding CAGR stay consistent with "Add Position".
-    db.session.add(
-        PortfolioTransaction(
-            portfolio_id=portfolio.id,
-            security_id=security.id,
-            txn_type="BUY",
-            quantity=quantity,
-            price=purchase_price,
-            fees=0.0,
-            executed_at=datetime.now(timezone.utc),
-        )
-    )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
 
-    db.session.commit()
     return jsonify(_serialize_holding(holding)), 201
 
 
@@ -1706,56 +1716,55 @@ def buy_holding(portfolio_id):
 
     total_cost = (price * quantity) + fees
 
-    # Adjust cash balance if cash position exists
-    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
-    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
-    if cash_sec is not None:
-        cash_holding = SecurityHolding.query.filter_by(
-            portfolio_id=portfolio.id, security_id=cash_sec.id
+    try:
+        # Debit the user's global wallet (shared across portfolios). A wallet
+        # with no funds blocks the buy instead of creating money from nothing.
+        wallet = _ensure_wallet(portfolio.base_currency)
+        avail_cash = float(wallet.balance)
+        if avail_cash < total_cost:
+            raise ApiError(
+                f"Insufficient wallet balance. Order total: ${total_cost:.2f}, Available: ${avail_cash:.2f}",
+                status_code=400,
+            )
+        wallet.balance = avail_cash - total_cost
+
+        security = _get_or_create_security(symbol)
+        holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=security.id
         ).first()
-        if cash_holding is not None:
-            avail_cash = float(cash_holding.quantity)
-            if avail_cash < total_cost:
-                raise ApiError(
-                    f"Insufficient cash balance. Order total: ${total_cost:.2f}, Available cash: ${avail_cash:.2f}",
-                    status_code=400,
-                )
-            cash_holding.quantity = avail_cash - total_cost
 
-    security = _get_or_create_security(symbol)
-    holding = SecurityHolding.query.filter_by(
-        portfolio_id=portfolio.id, security_id=security.id
-    ).first()
+        executed_at = datetime.now(timezone.utc)
 
-    executed_at = datetime.now(timezone.utc)
+        if holding is None:
+            holding = SecurityHolding(
+                portfolio_id=portfolio.id,
+                security_id=security.id,
+                quantity=quantity,
+                avg_cost=price,
+                first_purchased_at=executed_at,
+            )
+            db.session.add(holding)
+        else:
+            existing_qty = float(holding.quantity)
+            existing_cost = float(holding.avg_cost)
+            total_qty = existing_qty + quantity
+            holding.avg_cost = ((existing_qty * existing_cost) + (quantity * price)) / total_qty
+            holding.quantity = total_qty
 
-    if holding is None:
-        holding = SecurityHolding(
+        transaction = PortfolioTransaction(
             portfolio_id=portfolio.id,
             security_id=security.id,
+            txn_type="BUY",
             quantity=quantity,
-            avg_cost=price,
-            first_purchased_at=executed_at,
+            price=price,
+            fees=fees,
+            executed_at=executed_at,
         )
-        db.session.add(holding)
-    else:
-        existing_qty = float(holding.quantity)
-        existing_cost = float(holding.avg_cost)
-        total_qty = existing_qty + quantity
-        holding.avg_cost = ((existing_qty * existing_cost) + (quantity * price)) / total_qty
-        holding.quantity = total_qty
-
-    transaction = PortfolioTransaction(
-        portfolio_id=portfolio.id,
-        security_id=security.id,
-        txn_type="BUY",
-        quantity=quantity,
-        price=price,
-        fees=fees,
-        executed_at=executed_at,
-    )
-    db.session.add(transaction)
-    db.session.commit()
+        db.session.add(transaction)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
 
     return jsonify({
         "message": "Buy order executed",
@@ -1809,46 +1818,45 @@ def sell_holding(portfolio_id):
     if net_proceeds < 0:
         raise ApiError("Brokerage fees exceed trade proceeds", status_code=400)
 
-    security = Security.query.filter_by(symbol=symbol).first()
-    if security is None:
-        raise NotFoundError(f"Security {symbol} not found in portfolio {portfolio_id}")
+    try:
+        security = Security.query.filter_by(symbol=symbol).first()
+        if security is None:
+            raise NotFoundError(f"Security {symbol} not found in portfolio {portfolio_id}")
 
-    holding = SecurityHolding.query.filter_by(
-        portfolio_id=portfolio.id, security_id=security.id
-    ).first()
-    if holding is None:
-        raise NotFoundError(f"Holding for security {symbol} not found in portfolio {portfolio_id}")
-
-    existing_qty = float(holding.quantity)
-    if quantity > existing_qty:
-        raise ApiError("Sell quantity exceeds current holding quantity", status_code=400)
-
-    if existing_qty == quantity:
-        db.session.delete(holding)
-    else:
-        holding.quantity = existing_qty - quantity
-
-    # Credit proceeds to cash balance if cash position exists
-    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
-    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
-    if cash_sec is not None:
-        cash_holding = SecurityHolding.query.filter_by(
-            portfolio_id=portfolio.id, security_id=cash_sec.id
+        holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=security.id
         ).first()
-        if cash_holding is not None:
-            cash_holding.quantity = float(cash_holding.quantity) + net_proceeds
+        if holding is None:
+            raise NotFoundError(f"Holding for security {symbol} not found in portfolio {portfolio_id}")
 
-    transaction = PortfolioTransaction(
-        portfolio_id=portfolio.id,
-        security_id=security.id,
-        txn_type="SELL",
-        quantity=quantity,
-        price=price,
-        fees=fees,
-        executed_at=datetime.now(timezone.utc),
-    )
-    db.session.add(transaction)
-    db.session.commit()
+        existing_qty = float(holding.quantity)
+        if quantity > existing_qty:
+            raise ApiError("Sell quantity exceeds current holding quantity", status_code=400)
+
+        if existing_qty == quantity:
+            db.session.delete(holding)
+        else:
+            holding.quantity = existing_qty - quantity
+
+        # Credit proceeds to the user's global wallet, creating it first if it
+        # was never funded — sale money must never vanish.
+        wallet = _ensure_wallet(portfolio.base_currency)
+        wallet.balance = float(wallet.balance) + net_proceeds
+
+        transaction = PortfolioTransaction(
+            portfolio_id=portfolio.id,
+            security_id=security.id,
+            txn_type="SELL",
+            quantity=quantity,
+            price=price,
+            fees=fees,
+            executed_at=datetime.now(timezone.utc),
+        )
+        db.session.add(transaction)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
 
     return jsonify({
         "message": "Sell order executed",
@@ -1878,25 +1886,67 @@ def get_holding(portfolio_id, holding_id):
 
 @bp.put("/<int:portfolio_id>/holdings/<int:holding_id>")
 def update_holding(portfolio_id, holding_id):
-    _get_portfolio_or_404(portfolio_id)
-    holding = _get_holding_or_404(portfolio_id, holding_id)
-    payload = request.get_json(silent=True) or {}
-
-    if "quantity" in payload:
-        holding.quantity = _require_positive_int(payload, "quantity")
-    if "purchase_price" in payload:
-        holding.avg_cost = _require_positive_number(payload, "purchase_price")
-
-    db.session.commit()
-    return jsonify(_serialize_holding(holding))
+    # Free-form quantity/purchase_price edits were removed: rewriting a
+    # position's economics with no cash effect, no ledger entry and no
+    # first_purchased_at update let callers manufacture or erase P/L silently
+    # and desynced CAGR/XIRR. Corrections should go through a compensating
+    # trade instead of this endpoint.
+    raise ApiError(
+        "Holding corrections are not supported; sell and re-buy the position instead",
+        status_code=405,
+    )
 
 
 @bp.delete("/<int:portfolio_id>/holdings/<int:holding_id>")
 def delete_holding(portfolio_id, holding_id):
-    _get_portfolio_or_404(portfolio_id)
+    """Liquidate a holding at the current market price.
+
+    Deleting a position is a full SELL: it writes a ledger row and credits the
+    net proceeds to the portfolio's cash balance, so the transaction history
+    stays reconstructable and no value is destroyed silently. A cash balance is
+    not a security and cannot be deleted this way.
+    """
+    portfolio = _get_portfolio_or_404(portfolio_id)
     holding = _get_holding_or_404(portfolio_id, holding_id)
-    db.session.delete(holding)
-    db.session.commit()
+
+    if holding.security.type == "CASH":
+        raise ApiError(
+            "Cash balances are not holdings; use deposit/withdraw (or the {CCY}-CASH trade routes) instead",
+            status_code=400,
+        )
+
+    symbol = holding.security.symbol
+    quantity = float(holding.quantity)
+
+    try:
+        try:
+            price = float(_price_service().get_current_price(symbol))
+        except UnknownTickerError:
+            price = float(holding.avg_cost)
+
+        net_proceeds = price * quantity
+
+        wallet = _ensure_wallet(portfolio.base_currency)
+        wallet.balance = float(wallet.balance) + net_proceeds
+
+        db.session.add(
+            PortfolioTransaction(
+                portfolio_id=portfolio.id,
+                security_id=holding.security_id,
+                txn_type="SELL",
+                quantity=quantity,
+                price=price,
+                fees=0.0,
+                executed_at=datetime.now(timezone.utc),
+            )
+        )
+
+        db.session.delete(holding)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+
     return "", 204
 
 

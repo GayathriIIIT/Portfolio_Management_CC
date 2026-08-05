@@ -4,6 +4,7 @@ from app.models.security_holding import SecurityHolding
 from app.models.transaction import PortfolioTransaction
 from app.models.market_price import MarketPrice
 from app.models.whatif_price import WhatifPrice
+from app.models.wallet import Wallet
 
 __all__ = [
     "Portfolio",
@@ -12,4 +13,5 @@ __all__ = [
     "PortfolioTransaction",
     "MarketPrice",
     "WhatifPrice",
+    "Wallet",
 ]

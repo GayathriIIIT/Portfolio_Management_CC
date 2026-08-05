@@ -1,10 +1,14 @@
 
 -- =========================================================================
--- Portfolio Insight Service — Final Schema (6 tables)
+-- Portfolio Insight Service — Final Schema (7 tables)
 -- Tables: portfolio, security, security_holding,
---         portfolio_transaction, market_price, whatif_price
+--         portfolio_transaction, market_price, whatif_price, wallet
 -- Supports asset types: STOCK, BOND, CASH  (via `security.type`)
 -- Principle: store INPUTS only; P/L and market value are computed on read.
+--
+-- The global `wallet` holds the user's tradeable cash, shared across every
+-- portfolio. It is separate from a portfolio's holdings: a BUY draws from it, a
+-- SELL pays into it, and it never appears in a portfolio's value or charts.
 -- =========================================================================
 
 
@@ -135,3 +139,15 @@ CREATE TABLE whatif_price (
     CONSTRAINT uq_wp UNIQUE (portfolio_id, scenario_name, security_id)  -- one hypothetical price per security per scenario
 );
 CREATE INDEX ix_wp_scenario ON whatif_price(portfolio_id, scenario_name);
+
+
+-- =========================================================================
+-- 7. WALLET
+--    The user's global tradeable cash, one row per currency.
+--    Shared across every portfolio — BUY debits it, SELL credits it.
+--    Never included in a portfolio's value or its charts.
+-- =========================================================================
+CREATE TABLE wallet (
+    currency   CHAR(3)         PRIMARY KEY,   -- e.g. 'USD'
+    balance    NUMERIC(20,4)   NOT NULL DEFAULT 0
+);

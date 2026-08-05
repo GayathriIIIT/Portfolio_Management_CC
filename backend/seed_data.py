@@ -24,6 +24,7 @@ from app.models import (  # noqa: E402
     PortfolioTransaction,
     Security,
     SecurityHolding,
+    Wallet,
     WhatifPrice,
 )
 
@@ -138,30 +139,27 @@ def seed():
         "US10Y-2030", name="US Treasury 10Y Note 2030", type="BOND", exchange="OTC",
         currency="USD", coupon_rate=0.0425, maturity_date=date(2030, 5, 15), face_value=1000,
     )
-    cash = get_or_create_security(
-        "USD-CASH", name="US Dollar Cash", type="CASH", currency="USD", interest_rate=0.045,
-    )
 
     print("Security holdings:")
     get_or_create_holding(alice, aapl, quantity=15, avg_cost=165.25)
     get_or_create_holding(alice, msft, quantity=8, avg_cost=310.00)
     get_or_create_holding(alice, bond, quantity=5000, avg_cost=0.98)
-    get_or_create_holding(alice, cash, quantity=2500, avg_cost=1.00)
     get_or_create_holding(bob, tsla, quantity=20, avg_cost=210.50)
     get_or_create_holding(bob, aapl, quantity=5, avg_cost=172.00)
     get_or_create_holding(carol, msft, quantity=12, avg_cost=295.75)
-    get_or_create_holding(carol, cash, quantity=1000, avg_cost=1.00)
 
     print("Portfolio transactions:")
     add_transaction(alice, aapl, "BUY", 15, 165.25, now - timedelta(days=90))
     add_transaction(alice, msft, "BUY", 8, 310.00, now - timedelta(days=60))
-    add_transaction(alice, cash, "DEPOSIT", 2500, 1.00, now - timedelta(days=100))
     add_transaction(bob, tsla, "BUY", 25, 205.00, now - timedelta(days=45))
     add_transaction(bob, tsla, "SELL", 5, 230.00, now - timedelta(days=10))
     add_transaction(bob, aapl, "BUY", 5, 172.00, now - timedelta(days=20))
     add_transaction(carol, msft, "BUY", 12, 295.75, now - timedelta(days=30))
-    add_transaction(carol, cash, "DEPOSIT", 1000, 1.00, now - timedelta(days=30))
-    add_transaction(carol, cash, "WITHDRAW", 200, 1.00, now - timedelta(days=5))
+
+    print("Global wallet:")
+    if Wallet.query.filter_by(currency="USD").first() is None:
+        db.session.add(Wallet(currency="USD", balance=10000))
+        print("  + wallet USD = 10000")
 
     print("Market price history:")
     for i, price in enumerate([160.0, 172.5, 185.0]):
@@ -172,7 +170,6 @@ def seed():
         add_market_price(tsla, price, now - timedelta(days=(2 - i) * 30))
     add_market_price(bond, 0.97, now - timedelta(days=30))
     add_market_price(bond, 0.99, now)
-    add_market_price(cash, 1.00, now)
 
     print("Whatif scenarios:")
     add_whatif_price(alice, "Tech crash", aapl, 110.0)
