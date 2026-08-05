@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LineChart,
+  AreaChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -284,7 +285,13 @@ export function PerformanceChart({ portfolioId }) {
       ) : (
         <div style={{ width: '100%', height: 320 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+              <defs>
+                <linearGradient id="perfGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--accent-primary)" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="var(--accent-primary)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
               <XAxis
                 dataKey="time"
@@ -319,7 +326,7 @@ export function PerformanceChart({ portfolioId }) {
                 />
               )}
               <Tooltip content={<CustomTooltip />} />
-              <Line
+              <Area
                 yAxisId="left"
                 type="monotone"
                 dataKey="price"
@@ -327,6 +334,7 @@ export function PerformanceChart({ portfolioId }) {
                 strokeWidth={2.5}
                 dot={false}
                 activeDot={{ r: 5, stroke: 'var(--bg-card)', strokeWidth: 2 }}
+                fill="url(#perfGradient)"
               />
               {benchmark !== 'NONE' && (
                 <Line
@@ -340,7 +348,7 @@ export function PerformanceChart({ portfolioId }) {
                   activeDot={{ r: 5, fill: '#f59e0b', stroke: 'var(--bg-card)', strokeWidth: 2 }}
                 />
               )}
-            </LineChart>
+            </AreaChart>
           </ResponsiveContainer>
         </div>
       )}

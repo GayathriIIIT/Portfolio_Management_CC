@@ -629,6 +629,15 @@ body {
   background-color: var(--bg-card-hover);
 }
 
+/* Analytics pop-up: wider than the default modal so the chart and metric grid
+   fit comfortably, with internal scrolling for tall content. */
+.modal-content--analytics {
+  max-width: 760px;
+  padding: 0;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;
@@ -672,6 +681,12 @@ body {
 [data-theme='brainrot'] .brand-logo,
 [data-theme='brainrot-dark'] .brand-logo {
   box-shadow: 0 4px 14px rgba(236, 72, 153, 0.35);
+}
+
+[data-theme='brainrot'] .brand-title,
+[data-theme='brainrot-dark'] .brand-title {
+  color: #FE019A;
+  text-shadow: 0 0 8px rgba(254, 1, 154, 0.75), 0 0 20px rgba(254, 1, 154, 0.45);
 }
 
 [data-theme='brainrot'] .btn-primary,
@@ -722,6 +737,15 @@ body {
   top: -22px;
   right: 0;
   z-index: 5;
+}
+
+/* Profit/Loss sticker anchored to the top of the Total Return box */
+.kpi-wrap .brainrot-side-gif.kpi-total-return {
+  top: -50px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .brainrot-side-gif.whatif {

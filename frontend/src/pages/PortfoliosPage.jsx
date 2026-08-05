@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FolderCog, Plus, Trash2, Edit2, Check, X } from 'lucide-react';
 import { api } from '../services/api';
+import { useTheme } from '../context/ThemeContext';
 
 export function PortfoliosPage({
   portfolios,
@@ -9,6 +10,7 @@ export function PortfoliosPage({
   onOpenNewPortfolioModal,
   onRefreshList,
 }) {
+  const { isBrainrot } = useTheme();
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editCurrency, setEditCurrency] = useState('USD');
@@ -63,116 +65,141 @@ export function PortfoliosPage({
         </button>
       </div>
 
-      <div className="card">
-        <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Portfolio Name</th>
-                <th>Base Currency</th>
-                <th style={{ textAlign: 'right' }}>Positions / Holdings</th>
-                <th style={{ textAlign: 'right' }}>Created Date</th>
-                <th style={{ textAlign: 'center' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {portfolios.map((p) => {
-                const isEditing = editingId === p.id;
-                const isSelected = selectedPortfolioId === p.id;
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '20px' }}>
+        <div className="card" style={{ flex: 1, minWidth: 0 }}>
+          <div className="table-container">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Portfolio Name</th>
+                  <th>Base Currency</th>
+                  <th style={{ textAlign: 'right' }}>Positions / Holdings</th>
+                  <th style={{ textAlign: 'right' }}>Created Date</th>
+                  <th style={{ textAlign: 'center' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolios.map((p) => {
+                  const isEditing = editingId === p.id;
+                  const isSelected = selectedPortfolioId === p.id;
 
-                return (
-                  <tr key={p.id} style={{ backgroundColor: isSelected ? 'var(--accent-light)' : 'transparent' }}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: '600', color: 'var(--text-muted)' }}>
-                      #{p.id}
-                    </td>
+                  return (
+                    <tr key={p.id} style={{ backgroundColor: isSelected ? 'var(--accent-light)' : 'transparent' }}>
+                      <td style={{ fontFamily: 'monospace', fontWeight: '600', color: 'var(--text-muted)' }}>
+                        #{p.id}
+                      </td>
 
-                    <td>
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          className="form-input"
-                          style={{ height: '32px', fontSize: '0.85rem' }}
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                        />
-                      ) : (
-                        <div style={{ fontWeight: '700', fontSize: '0.95rem' }}>
-                          {p.name} {isSelected && <span className="badge badge-success" style={{ marginLeft: '6px' }}>Active</span>}
-                        </div>
-                      )}
-                    </td>
-
-                    <td>
-                      {isEditing ? (
-                        <select
-                          className="form-select"
-                          style={{ height: '32px', fontSize: '0.85rem', padding: '2px 8px' }}
-                          value={editCurrency}
-                          onChange={(e) => setEditCurrency(e.target.value)}
-                        >
-                          <option value="USD">USD</option>
-                          <option value="EUR">EUR</option>
-                          <option value="GBP">GBP</option>
-                          <option value="JPY">JPY</option>
-                        </select>
-                      ) : (
-                        <span className="badge badge-secondary">{p.base_currency || 'USD'}</span>
-                      )}
-                    </td>
-
-                    <td style={{ textAlign: 'right', fontWeight: '600' }}>
-                      {p.holding_count ?? (p.holdings ? p.holdings.length : 0)}
-                    </td>
-
-                    <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontSize: '0.825rem' }}>
-                      {p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A'}
-                    </td>
-
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      <td>
                         {isEditing ? (
-                          <>
-                            <button className="btn btn-primary btn-sm" onClick={() => saveEdit(p.id)} title="Save">
-                              <Check size={14} />
-                            </button>
-                            <button className="btn btn-secondary btn-sm" onClick={cancelEdit} title="Cancel">
-                              <X size={14} />
-                            </button>
-                          </>
+                          <input
+                            type="text"
+                            className="form-input"
+                            style={{ height: '32px', fontSize: '0.85rem' }}
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                          />
                         ) : (
-                          <>
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => onSelectPortfolio(p.id)}
-                              title="Select active portfolio"
-                            >
-                              Select
-                            </button>
-                            <button
-                              className="btn btn-secondary btn-sm"
-                              onClick={() => startEdit(p)}
-                              title="Edit portfolio"
-                            >
-                              <Edit2 size={14} />
-                            </button>
-                            <button
-                              className="btn btn-secondary btn-sm text-negative"
-                              onClick={() => handleDelete(p.id, p.name)}
-                              title="Delete portfolio"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </>
+                          <div style={{ fontWeight: '700', fontSize: '0.95rem' }}>
+                            {p.name} {isSelected && <span className="badge badge-success" style={{ marginLeft: '6px' }}>Active</span>}
+                          </div>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      </td>
+
+                      <td>
+                        {isEditing ? (
+                          <select
+                            className="form-select"
+                            style={{ height: '32px', fontSize: '0.85rem', padding: '2px 8px' }}
+                            value={editCurrency}
+                            onChange={(e) => setEditCurrency(e.target.value)}
+                          >
+                            <option value="USD">USD</option>
+                            <option value="EUR">EUR</option>
+                            <option value="GBP">GBP</option>
+                            <option value="JPY">JPY</option>
+                          </select>
+                        ) : (
+                          <span className="badge badge-secondary">{p.base_currency || 'USD'}</span>
+                        )}
+                      </td>
+
+                      <td style={{ textAlign: 'right', fontWeight: '600' }}>
+                        {p.holding_count ?? (p.holdings ? p.holdings.length : 0)}
+                      </td>
+
+                      <td style={{ textAlign: 'right', color: 'var(--text-secondary)', fontSize: '0.825rem' }}>
+                        {p.created_at ? new Date(p.created_at).toLocaleDateString() : 'N/A'}
+                      </td>
+
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                          {isEditing ? (
+                            <>
+                              <button className="btn btn-primary btn-sm" onClick={() => saveEdit(p.id)} title="Save">
+                                <Check size={14} />
+                              </button>
+                              <button className="btn btn-secondary btn-sm" onClick={cancelEdit} title="Cancel">
+                                <X size={14} />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => onSelectPortfolio(p.id)}
+                                title="Select active portfolio"
+                              >
+                                Select
+                              </button>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => startEdit(p)}
+                                title="Edit portfolio"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                              <button
+                                className="btn btn-secondary btn-sm text-negative"
+                                onClick={() => handleDelete(p.id, p.name)}
+                                title="Delete portfolio"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        {isBrainrot && (
+          <div
+            style={{
+              width: '220px',
+              height: '200px',
+              borderRadius: '12px',
+              border: '2px solid var(--accent-primary)',
+              overflow: 'hidden',
+              background: 'rgba(255, 255, 255, 0.6)',
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <img
+              src="/brainrot/side-eye-manage-portfolio.gif"
+              alt="side eye"
+              style={{ width: '200px', height: 'auto', objectFit: 'contain' }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

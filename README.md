@@ -215,5 +215,3 @@ We have created a sample API that you can interact with to get dummy financial d
 https://c4rm9elh30.execute-api.us-east-1.amazonaws.com/default/cachedPriceData?ticker=TSLA
 
 It's caching price data from yahoo in the background so it doesn't do excess requests to yahoo. Only a few tickers are there by default. Tickers are: C, AMZN, TSLA, FB, AAPL
-
->>>>>>> master

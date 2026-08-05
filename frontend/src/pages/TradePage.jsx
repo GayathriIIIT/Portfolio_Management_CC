@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign, Activity } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { rememberTicker } from '../services/tickerCache';
+import { HoldingAnalyticsPanel } from '../components/HoldingAnalyticsPanel';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
@@ -22,16 +23,29 @@ export function TradePage({ portfolio, onTradeSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [analyticsSymbol, setAnalyticsSymbol] = useState(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    // Clear portfolio-specific state so nothing from the previously selected
+    // portfolio lingers (recent trades, quote, FX rate, messages) while the new
+    // portfolio's data is loading.
+    setRecentTransactions([]);
+    setQuoteInfo(null);
+    setFxRate(1.0);
+    setSuccessMsg(null);
+    setError(null);
     if (portfolio?.id) {
       loadRecentTransactions();
     }
   }, [portfolio?.id]);
 
   const loadRecentTransactions = async () => {
+    if (!portfolio?.id) return;
+    const requestId = ++requestIdRef.current;
     try {
       const data = await api.getTransactions(portfolio.id);
+      if (requestId !== requestIdRef.current) return; // stale response
       setRecentTransactions(data.slice(0, 8)); // Top 8 recent trades
     } catch (err) {
       // Handle silently
@@ -46,6 +60,7 @@ export function TradePage({ portfolio, onTradeSuccess }) {
     try {
       const res = await api.getRealtimeQuote(symbol.trim());
       setQuoteInfo(res);
+      rememberTicker(symbol.trim().toUpperCase(), res.name || '');
       if (res.price) {
         setPrice(res.price);
       }
@@ -122,7 +137,7 @@ export function TradePage({ portfolio, onTradeSuccess }) {
       }
 
       setSuccessMsg(`${txnType} trade executed successfully!`);
-      rememberTicker(sym);
+      rememberTicker(sym, quoteInfo?.name || '');
       if (isBrainrot) {
         showToast(
           txnType === 'BUY' ? 'buy-dance.gif' : 'sell-dance.gif',
@@ -142,6 +157,16 @@ export function TradePage({ portfolio, onTradeSuccess }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleGetAnalytics = () => {
+    const sym = (symbol || '').trim().toUpperCase();
+    if (!sym) {
+      setError('Enter a ticker symbol first, then click Get Analytics.');
+      return;
+    }
+    setError(null);
+    setAnalyticsSymbol(sym);
   };
 
   if (!portfolio) {
@@ -191,14 +216,25 @@ export function TradePage({ portfolio, onTradeSuccess }) {
             </div>
           )}
 
-          <form onSubmit={handleExecuteTrade}>
+          {/* Enter must never submit the order — trades only execute from the
+              explicit button so a stray Enter in the symbol/quantity fields
+              can't fire an order the user didn't mean to place. */}
+          <form
+            onSubmit={handleExecuteTrade}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.preventDefault();
+            }}
+          >
             {/* BUY / SELL Switcher */}
             <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
               <button
                 type="button"
                 className={`btn ${txnType === 'BUY' ? 'btn-primary' : 'btn-secondary'}`}
                 style={{ flex: 1 }}
-                onClick={() => setTxnType('BUY')}
+                onClick={() => {
+                  setTxnType('BUY');
+                  setAnalyticsSymbol(null);
+                }}
               >
                 BUY Order
               </button>
@@ -206,7 +242,10 @@ export function TradePage({ portfolio, onTradeSuccess }) {
                 type="button"
                 className={`btn ${txnType === 'SELL' ? 'btn-danger' : 'btn-secondary'}`}
                 style={{ flex: 1 }}
-                onClick={() => setTxnType('SELL')}
+                onClick={() => {
+                  setTxnType('SELL');
+                  setAnalyticsSymbol(null);
+                }}
               >
                 SELL Order
               </button>
@@ -220,9 +259,11 @@ export function TradePage({ portfolio, onTradeSuccess }) {
                   value={symbol}
                   onChange={(val) => {
                     setSymbol(val);
-                    // Reset quote info and FX rate when symbol changes
+                    // Reset quote info, FX rate and any fetched analytics when
+                    // the symbol changes so stale data is never shown.
                     setQuoteInfo(null);
                     setFxRate(1.0);
+                    setAnalyticsSymbol(null);
                   }}
                   placeholder="e.g. AAPL, TSLA, MSFT"
                   required={true}
@@ -236,6 +277,17 @@ export function TradePage({ portfolio, onTradeSuccess }) {
                   <Search size={14} />
                   <span>{isFetchingQuote ? 'Checking...' : 'Get Quote'}</span>
                 </button>
+                {txnType === 'BUY' && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleGetAnalytics}
+                    disabled={isFetchingQuote}
+                  >
+                    <Activity size={14} />
+                    <span>Get Analytics</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -424,6 +476,20 @@ export function TradePage({ portfolio, onTradeSuccess }) {
           )}
         </div>
       </div>
+
+      {/* Pre-purchase analytics (BUY only): opens as a pop-up so the user can
+          study the security's price history, risk metrics and recommendation
+          without scrolling away from the trade form. */}
+      {txnType === 'BUY' && analyticsSymbol && (
+        <div className="modal-overlay" onClick={() => setAnalyticsSymbol(null)}>
+          <div className="modal-content modal-content--analytics" onClick={(e) => e.stopPropagation()}>
+            <HoldingAnalyticsPanel
+              symbol={analyticsSymbol}
+              onClose={() => setAnalyticsSymbol(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

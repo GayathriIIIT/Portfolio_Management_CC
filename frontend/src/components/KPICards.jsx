@@ -80,7 +80,7 @@ export function KPICards({ analytics, currency = 'USD' }) {
           positions currently held. Deliberately different from the risk card's
           Total Return (TWR), which is time-weighted over the whole window and
           includes realized/closed positions and strips deposits. */}
-      <div className="card kpi-card">
+      <div className="card kpi-card" style={{ position: 'relative' }}>
         <div className="kpi-header">
           <span>Return on Cost</span>
           <PieChart size={18} style={{ color: 'var(--accent-primary)' }} />
@@ -96,6 +96,15 @@ export function KPICards({ analytics, currency = 'USD' }) {
             Unrealized on current holdings (≠ Total Return TWR)
           </span>
         </div>
+        {isBrainrot && (
+          <div className={`brainrot-side-gif kpi-total-return ${isPositive ? 'profit' : 'loss'}`}>
+            <img
+              src={isPositive ? '/brainrot/happy-cat.gif' : '/brainrot/crying-hamster.gif'}
+              alt={isPositive ? 'Portfolio in profit' : 'Portfolio in loss'}
+            />
+            <span>{isPositive ? 'WE ARE IN PROFIT, CHAT!' : 'WE ARE IN LOSS, CHAT!'}</span>
+          </div>
+        )}
       </div>
 
       {/* 5. Annualized Return (XIRR) - hidden until the portfolio has been
@@ -138,15 +147,6 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
       </div>
     </div>
-    {isBrainrot && (
-      <div className={`brainrot-side-gif ${isPositive ? 'profit' : 'loss'}`}>
-        <img
-          src={isPositive ? '/brainrot/happy-cat.gif' : '/brainrot/crying-hamster.gif'}
-          alt={isPositive ? 'Portfolio in profit' : 'Portfolio in loss'}
-        />
-        <span>{isPositive ? 'WE ARE IN PROFIT, CHAT!' : 'WE ARE IN LOSS, CHAT!'}</span>
-      </div>
-    )}
     </div>
   );
 }

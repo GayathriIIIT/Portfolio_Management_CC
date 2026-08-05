@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ThemeProvider } from './context/ThemeContext';
 import { BrainrotToastProvider } from './context/BrainrotToastContext';
 import { api } from './services/api';
@@ -14,8 +14,12 @@ import { WhatIfPage } from './pages/WhatIfPage';
 import { PortfoliosPage } from './pages/PortfoliosPage';
 
 import { TradeModal } from './components/TradeModal';
+import { AddHoldingModal } from './components/AddHoldingModal';
 import { NewPortfolioModal } from './components/NewPortfolioModal';
 import { ManageCashModal } from './components/ManageCashModal';
+
+// How often the dashboard auto-refreshes live prices (2 minutes).
+const LIVE_REFRESH_MS = 2 * 60 * 1000;
 
 export function AppContent() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -26,9 +30,23 @@ export function AppContent() {
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isPortfolioLoading, setIsPortfolioLoading] = useState(false);
+  const [portfolioError, setPortfolioError] = useState(null);
+
+  // Tracks the portfolio the UI is currently meant to show. Async responses
+  // whose portfolio no longer matches are discarded, so switching away from a
+  // portfolio can never let its late response overwrite the newer selection
+  // (this was how a loss-making portfolio kept rendering a profit portfolio's
+  // "WE ARE IN PROFIT" KPIs after the switch).
+  const selectedPortfolioIdRef = useRef(selectedPortfolioId);
+  selectedPortfolioIdRef.current = selectedPortfolioId;
+
+  // Guards the auto-refresh so overlapping live-price fetches never pile up.
+  const refreshInFlight = useRef(false);
 
   // Modals
   const [tradeModal, setTradeModal] = useState({ isOpen: false, type: 'BUY', symbol: '' });
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isNewPortfolioModalOpen, setIsNewPortfolioModalOpen] = useState(false);
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
 
@@ -56,17 +74,34 @@ export function AppContent() {
 
   // Fetch active portfolio details & analytics when selected portfolio changes
   const loadPortfolioData = useCallback(async () => {
-    if (!selectedPortfolioId) return;
+    const pid = selectedPortfolioId;
+    if (!pid) return;
+
+    // Clear any data belonging to the previously selected portfolio immediately.
+    // Leaving it in place is what made a portfolio in loss render the previous
+    // (profit) portfolio's KPIs / "WE ARE IN PROFIT" message until (or if) the
+    // new fetch resolved.
+    setActivePortfolio(null);
+    setAnalytics(null);
+    setPortfolioError(null);
+    setIsPortfolioLoading(true);
 
     try {
       const [portfolioRes, analyticsRes] = await Promise.all([
-        api.getPortfolio(selectedPortfolioId),
-        api.getPortfolioAnalytics(selectedPortfolioId),
+        api.getPortfolio(pid),
+        api.getPortfolioAnalytics(pid),
       ]);
+      if (pid !== selectedPortfolioIdRef.current) return; // stale response
       setActivePortfolio(portfolioRes);
       setAnalytics(analyticsRes);
     } catch (err) {
+      if (pid !== selectedPortfolioIdRef.current) return; // stale response
       console.error('Failed to fetch portfolio data:', err);
+      setPortfolioError(`Failed to load portfolio data: ${err.message}`);
+    } finally {
+      if (pid === selectedPortfolioIdRef.current) {
+        setIsPortfolioLoading(false);
+      }
     }
   }, [selectedPortfolioId]);
 
@@ -74,23 +109,61 @@ export function AppContent() {
     loadPortfolioData();
   }, [loadPortfolioData]);
 
+  // Refetch the current portfolio's data in place (used after mutations such as
+  // trades, cash changes or holding deletes). Unlike loadPortfolioData this does
+  // not blank the UI to a loading screen, so in-page feedback (e.g. a successful
+  // trade message) is preserved while the refreshed data swaps in.
+  const refreshPortfolioData = useCallback(async () => {
+    const pid = selectedPortfolioId;
+    if (!pid) return;
+    try {
+      const [portfolioRes, analyticsRes] = await Promise.all([
+        api.getPortfolio(pid),
+        api.getPortfolioAnalytics(pid),
+      ]);
+      if (pid !== selectedPortfolioIdRef.current) return; // stale response
+      setActivePortfolio(portfolioRes);
+      setAnalytics(analyticsRes);
+    } catch (err) {
+      console.error('Failed to refresh portfolio data:', err);
+    }
+  }, [selectedPortfolioId]);
+
   // Refresh live prices from Yahoo Finance
-  const handleRefreshPrices = async () => {
-    if (!selectedPortfolioId) return;
+  const handleRefreshPrices = useCallback(async () => {
+    const pid = selectedPortfolioId;
+    if (!pid) return;
     setIsRefreshing(true);
     try {
-      const res = await api.refreshPortfolioPrices(selectedPortfolioId);
+      const res = await api.refreshPortfolioPrices(pid);
+      if (pid !== selectedPortfolioIdRef.current) return; // stale response
       if (res.analytics) {
         setAnalytics(res.analytics);
       } else {
-        loadPortfolioData();
+        refreshPortfolioData();
       }
     } catch (err) {
       console.error('Failed to refresh prices:', err);
     } finally {
-      setIsRefreshing(false);
+      if (pid === selectedPortfolioIdRef.current) {
+        setIsRefreshing(false);
+      }
     }
-  };
+  }, [selectedPortfolioId, refreshPortfolioData]);
+
+  // Auto-refresh live prices every 2 minutes on the main dashboard so the
+  // Portfolio Value KPI stays current without needing the manual button.
+  useEffect(() => {
+    if (activeTab !== 'dashboard' || !selectedPortfolioId) return;
+    const timer = setInterval(() => {
+      if (refreshInFlight.current) return;
+      refreshInFlight.current = true;
+      handleRefreshPrices().finally(() => {
+        refreshInFlight.current = false;
+      });
+    }, LIVE_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [activeTab, selectedPortfolioId, handleRefreshPrices]);
 
   const handleOpenTradeModal = (type = 'BUY', symbol = '') => {
     setTradeModal({ isOpen: true, type, symbol });
@@ -101,7 +174,7 @@ export function AppContent() {
     if (window.confirm('Are you sure you want to remove this security holding?')) {
       try {
         await api.deleteHolding(selectedPortfolioId, holdingId);
-        loadPortfolioData();
+        refreshPortfolioData();
       } catch (err) {
         alert(`Error deleting holding: ${err.message}`);
       }
@@ -139,42 +212,7 @@ export function AppContent() {
             <div className="empty-state">Loading portfolio hub...</div>
           ) : (
             <>
-              {activeTab === 'dashboard' && (
-                <DashboardPage
-                  portfolio={activePortfolio}
-                  analytics={analytics}
-                  onOpenTradeModal={handleOpenTradeModal}
-                  onDeleteHolding={handleDeleteHolding}
-                  onOpenCashModal={() => setIsCashModalOpen(true)}
-                />
-              )}
-
-              {activeTab === 'holdings' && (
-                <HoldingsPage
-                  portfolio={activePortfolio}
-                  analytics={analytics}
-                  onOpenTradeModal={handleOpenTradeModal}
-                  onDeleteHolding={handleDeleteHolding}
-                  onOpenCashModal={() => setIsCashModalOpen(true)}
-                />
-              )}
-
-              {activeTab === 'trade' && (
-                <TradePage
-                  portfolio={activePortfolio}
-                  onTradeSuccess={loadPortfolioData}
-                />
-              )}
-
-              {activeTab === 'transactions' && (
-                <TransactionsPage portfolio={activePortfolio} />
-              )}
-
-              {activeTab === 'what-if' && (
-                <WhatIfPage portfolio={activePortfolio} />
-              )}
-
-              {activeTab === 'portfolios' && (
+              {activeTab === 'portfolios' ? (
                 <PortfoliosPage
                   portfolios={portfolios}
                   selectedPortfolioId={selectedPortfolioId}
@@ -182,6 +220,51 @@ export function AppContent() {
                   onOpenNewPortfolioModal={() => setIsNewPortfolioModalOpen(true)}
                   onRefreshList={loadPortfolios}
                 />
+              ) : isPortfolioLoading ? (
+                <div className="empty-state">Loading portfolio data...</div>
+              ) : portfolioError ? (
+                <div className="empty-state" style={{ color: 'var(--danger-text)' }}>
+                  {portfolioError}
+                </div>
+              ) : (
+                <>
+                  {activeTab === 'dashboard' && (
+                    <DashboardPage
+                      portfolio={activePortfolio}
+                      analytics={analytics}
+                      onOpenTradeModal={handleOpenTradeModal}
+                      onDeleteHolding={handleDeleteHolding}
+                      onOpenAddModal={() => setIsAddModalOpen(true)}
+                      onOpenCashModal={() => setIsCashModalOpen(true)}
+                    />
+                  )}
+
+                  {activeTab === 'holdings' && (
+                    <HoldingsPage
+                      portfolio={activePortfolio}
+                      analytics={analytics}
+                      onOpenTradeModal={handleOpenTradeModal}
+                      onDeleteHolding={handleDeleteHolding}
+                      onOpenAddModal={() => setIsAddModalOpen(true)}
+                      onOpenCashModal={() => setIsCashModalOpen(true)}
+                    />
+                  )}
+
+              {activeTab === 'trade' && (
+                <TradePage
+                  portfolio={activePortfolio}
+                  onTradeSuccess={refreshPortfolioData}
+                />
+              )}
+
+                  {activeTab === 'transactions' && (
+                    <TransactionsPage portfolio={activePortfolio} />
+                  )}
+
+                  {activeTab === 'what-if' && (
+                    <WhatIfPage portfolio={activePortfolio} />
+                  )}
+                </>
               )}
             </>
           )}
@@ -195,7 +278,14 @@ export function AppContent() {
         portfolioId={selectedPortfolioId}
         initialType={tradeModal.type}
         initialSymbol={tradeModal.symbol}
-        onTradeSuccess={loadPortfolioData}
+        onTradeSuccess={refreshPortfolioData}
+      />
+
+      <AddHoldingModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        portfolioId={selectedPortfolioId}
+        onSuccess={refreshPortfolioData}
       />
 
       <NewPortfolioModal
@@ -208,7 +298,7 @@ export function AppContent() {
         isOpen={isCashModalOpen}
         onClose={() => setIsCashModalOpen(false)}
         portfolioId={selectedPortfolioId}
-        onSuccess={loadPortfolioData}
+        onSuccess={refreshPortfolioData}
       />
     </div>
   );
