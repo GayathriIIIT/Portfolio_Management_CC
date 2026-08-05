@@ -477,15 +477,17 @@ export function TradePage({ portfolio, onTradeSuccess }) {
         </div>
       </div>
 
-      {/* Pre-purchase analytics (BUY only): lets the user study the selected
-          security's price history, risk metrics and recommendation before
-          placing the order. */}
+      {/* Pre-purchase analytics (BUY only): opens as a pop-up so the user can
+          study the security's price history, risk metrics and recommendation
+          without scrolling away from the trade form. */}
       {txnType === 'BUY' && analyticsSymbol && (
-        <div className="card" style={{ marginTop: '28px', padding: 0, overflow: 'hidden' }}>
-          <HoldingAnalyticsPanel
-            symbol={analyticsSymbol}
-            onClose={() => setAnalyticsSymbol(null)}
-          />
+        <div className="modal-overlay" onClick={() => setAnalyticsSymbol(null)}>
+          <div className="modal-content modal-content--analytics" onClick={(e) => e.stopPropagation()}>
+            <HoldingAnalyticsPanel
+              symbol={analyticsSymbol}
+              onClose={() => setAnalyticsSymbol(null)}
+            />
+          </div>
         </div>
       )}
     </div>

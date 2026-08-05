@@ -629,6 +629,15 @@ body {
   background-color: var(--bg-card-hover);
 }
 
+/* Analytics pop-up: wider than the default modal so the chart and metric grid
+   fit comfortably, with internal scrolling for tall content. */
+.modal-content--analytics {
+  max-width: 760px;
+  padding: 0;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;
