@@ -107,7 +107,7 @@ export function AddHoldingModal({ isOpen, onClose, portfolioId, onSuccess }) {
             </div>
 
             <div className="form-group">
-              <label className="form-label">Purchase Price ($)</label>
+              <label className="form-label">Purchase Price (native)</label>
               <input
                 type="number"
                 step="0.01"

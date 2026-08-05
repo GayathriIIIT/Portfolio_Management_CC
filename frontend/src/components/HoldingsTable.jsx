@@ -211,6 +211,7 @@ export function HoldingsTable({
                       <td colSpan={9} style={{ padding: 0, border: 'none' }}>
                         <HoldingAnalyticsPanel
                           symbol={h.symbol}
+                          currency={h.currency || currency}
                           onClose={() => setExpandedSymbol(null)}
                         />
                       </td>

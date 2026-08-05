@@ -5,7 +5,7 @@ import { useTheme } from '../context/ThemeContext';
 
 const COLORS = ['#2563eb', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
-export function AssetAllocationChart({ holdings = [] }) {
+export function AssetAllocationChart({ holdings = [], currency = 'USD' }) {
   const { isBrainrot } = useTheme();
   if (!holdings || holdings.length === 0) {
     return (
@@ -47,7 +47,7 @@ export function AssetAllocationChart({ holdings = [] }) {
         <div className="custom-chart-tooltip">
           <div style={{ fontWeight: '700', color: 'var(--text-primary)' }}>{data.name}</div>
           <div style={{ color: 'var(--accent-primary)', fontWeight: '600' }}>
-            ${data.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {currency} {data.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{pct}% of Portfolio</div>
         </div>

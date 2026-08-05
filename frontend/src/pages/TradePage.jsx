@@ -7,7 +7,7 @@ import { HoldingAnalyticsPanel } from '../components/HoldingAnalyticsPanel';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
-export function TradePage({ portfolio, walletBalance = 0, onTradeSuccess }) {
+export function TradePage({ portfolio, walletBalance = 0, currency = 'USD', onTradeSuccess }) {
   const { isBrainrot } = useTheme();
   const { showToast } = useBrainrotToast();
   const [symbol, setSymbol] = useState('');
@@ -124,7 +124,7 @@ export function TradePage({ portfolio, walletBalance = 0, onTradeSuccess }) {
         const buyTotal = priceVal * qty + feeVal;
         if (buyTotal > walletBalance) {
           throw new Error(
-            `Insufficient wallet balance. Order total: $${buyTotal.toFixed(2)}, Available: $${walletBalance.toFixed(2)}`
+            `Insufficient wallet balance. Order total: ${currency} ${buyTotal.toFixed(2)}, Available: ${currency} ${walletBalance.toFixed(2)}`
           );
         }
       }
@@ -519,6 +519,7 @@ export function TradePage({ portfolio, walletBalance = 0, onTradeSuccess }) {
           <div className="modal-content modal-content--analytics" onClick={(e) => e.stopPropagation()}>
             <HoldingAnalyticsPanel
               symbol={analyticsSymbol}
+              currency={stockCurrency}
               onClose={() => setAnalyticsSymbol(null)}
             />
           </div>

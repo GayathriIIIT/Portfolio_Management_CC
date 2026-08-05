@@ -507,8 +507,13 @@ class MarketPriceService:
         self._cache[symbol] = entry
         return entry
 
-    def get_fx_rate(self, from_currency, to_currency):
-        """Fetch or return cached FX exchange rate from `from_currency` to `to_currency`."""
+    def get_fx_rate(self, from_currency, to_currency, strict=False):
+        """Fetch or return cached FX exchange rate from `from_currency` to `to_currency`.
+
+        When `strict` is True (used by the wallet exchange endpoint) a failed
+        lookup raises UnknownTickerError instead of silently returning 1.0, so a
+        bad rate can never quietly zero out a real conversion.
+        """
         if not from_currency or not to_currency or from_currency.upper().strip() == to_currency.upper().strip():
             return 1.0
 
@@ -531,16 +536,24 @@ class MarketPriceService:
 
         rate = 1.0
         pair_symbol = f"{from_c}{to_c}=X"
+        fetched = False
         try:
             quote = _fetch_quote(pair_symbol)
             rate = float(quote["price"])
+            fetched = True
         except Exception:
             inv_symbol = f"{to_c}{from_c}=X"
             try:
                 inv_quote = _fetch_quote(inv_symbol)
                 rate = 1.0 / float(inv_quote["price"])
+                fetched = True
             except Exception:
                 rate = 1.0
+
+        if not fetched and strict:
+            raise UnknownTickerError(
+                f"Could not fetch FX rate for {from_c} -> {to_c}"
+            )
 
         self._cache[key] = {"rate": rate, "fetched_at": datetime.now(timezone.utc)}
         return rate

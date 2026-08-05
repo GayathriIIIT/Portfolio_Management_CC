@@ -521,6 +521,45 @@ def test_buy_and_sell_endpoints(client):
     assert usd["balance"] == 1580.0
 
 
+def test_buy_and_sell_settle_in_base_currency_at_fx(client, app, monkeypatch):
+    """A USD-denominated security in an EUR-base portfolio settles the wallet in
+    EUR, converting the native price at the USD->EUR FX rate on buy and sell."""
+    from app.services.market_price_service import MarketPriceService
+
+    def fake_fx(self, from_ccy, to_ccy, strict=False):
+        return {("USD", "EUR"): 0.8, ("EUR", "USD"): 1.25}.get(
+            (from_ccy.upper(), to_ccy.upper()), 1.0
+        )
+
+    monkeypatch.setattr(MarketPriceService, "get_fx_rate", fake_fx)
+
+    created = client.post(
+        "/api/portfolios",
+        json={"owner": "Alice", "name": "EUR Fund", "base_currency": "EUR"},
+    ).get_json()
+    client.post("/api/wallet/deposit", json={"amount": 2000.0, "currency": "EUR"})
+
+    buy_resp = client.post(
+        f"/api/portfolios/{created['id']}/buy",
+        json={"symbol": "AAPL", "quantity": 2, "price": 100.0},
+    )
+    assert buy_resp.status_code == 201
+
+    # 2 * 100 USD * 0.8 = 160 EUR debited from the EUR wallet.
+    eur_wallet = next(w for w in client.get("/api/wallet").get_json() if w["currency"] == "EUR")
+    assert eur_wallet["balance"] == 1840.0
+
+    sell_resp = client.post(
+        f"/api/portfolios/{created['id']}/sell",
+        json={"symbol": "AAPL", "quantity": 1, "price": 120.0},
+    )
+    assert sell_resp.status_code == 201
+
+    # 1 * 120 USD * 0.8 = 96 EUR credited back.
+    eur_wallet = next(w for w in client.get("/api/wallet").get_json() if w["currency"] == "EUR")
+    assert eur_wallet["balance"] == 1936.0
+
+
 def test_buy_without_funding_rejected(client):
     """The core 'free money' bug: a user with no wallet funds has a zero balance,
     so the order is rejected instead of succeeding unchecked."""
