@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -156,10 +156,16 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
               </div>
               <div style={{ width: '100%', height: 240 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
+                  <AreaChart
                     data={nav.map((pt) => ({ date: pt.date, price: Number(pt.value) || 0 }))}
                     margin={{ top: 5, right: 20, left: 10, bottom: 0 }}
                   >
+                    <defs>
+                      <linearGradient id="analyticsPriceGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--accent-primary)" stopOpacity={0.35} />
+                        <stop offset="100%" stopColor="var(--accent-primary)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                     <XAxis
                       dataKey="date"
@@ -197,15 +203,16 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
                         fontSize: '0.8rem',
                       }}
                     />
-                    <Line
+                    <Area
                       type="monotone"
                       dataKey="price"
                       stroke="var(--accent-primary)"
                       strokeWidth={2.5}
                       dot={false}
                       activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--bg-card)' }}
+                      fill="url(#analyticsPriceGradient)"
                     />
-                  </LineChart>
+                  </AreaChart>
                 </ResponsiveContainer>
               </div>
             </div>
