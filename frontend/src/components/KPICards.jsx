@@ -76,7 +76,10 @@ export function KPICards({ analytics, currency = 'USD' }) {
         </div>
       </div>
 
-      {/* 4. Total Return on Cost % */}
+      {/* 4. Total Return on Cost % — unrealized P&L on the cost basis of the
+          positions currently held. Deliberately different from the risk card's
+          Total Return (TWR), which is time-weighted over the whole window and
+          includes realized/closed positions and strips deposits. */}
       <div className="card kpi-card">
         <div className="kpi-header">
           <span>Return on Cost</span>
@@ -88,6 +91,9 @@ export function KPICards({ analytics, currency = 'USD' }) {
         <div className="kpi-subtext">
           <span className={`badge ${isPositive ? 'badge-success' : 'badge-danger'}`}>
             {isPositive ? '▲' : '▼'}             {Math.abs(profit_loss_percentage).toFixed(2)}% on cost basis
+          </span>
+          <span style={{ display: 'block', marginTop: 2, fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+            Unrealized on current holdings (≠ Total Return TWR)
           </span>
         </div>
       </div>
