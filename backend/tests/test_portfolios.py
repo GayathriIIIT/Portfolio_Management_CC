@@ -346,9 +346,15 @@ def test_portfolio_what_if_uses_manual_price_for_single_symbol(client, monkeypat
     )
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["current_value"] == 310.0
-    assert body["profit_loss"] == 210.0
+    # The target price revalues the basket; the live price is the cost to build
+    # it today. So the hypothetical market value is $100 and the P&L against
+    # today's $310 quote is -$210.
+    assert body["current_value"] == 100.0
+    assert body["invested_value"] == 310.0
+    assert body["profit_loss"] == -210.0
     assert body["holdings"][0]["symbol"] == "MSFT"
+    assert body["holdings"][0]["market_value"] == 100.0
+    assert body["holdings"][0]["cost_basis"] == 310.0
 
 
 def test_portfolio_what_if_accepts_historical_high_price_for_symbol(client, monkeypatch):
@@ -378,9 +384,111 @@ def test_portfolio_what_if_accepts_historical_high_price_for_symbol(client, monk
     )
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["current_value"] == 180.0
-    assert body["profit_loss"] == 30.0
+    # Historical price revalues the basket (current_value); live price is the
+    # cost basis. 150 vs today's 180 => -$30.
+    assert body["current_value"] == 150.0
+    assert body["invested_value"] == 180.0
+    assert body["profit_loss"] == -30.0
     assert body["holdings"][0]["symbol"] == "MSFT"
+
+
+def test_portfolio_what_if_sandbox_basket_sums_by_quantity(client, monkeypatch):
+    """Sandbox basket semantics: market value uses the entered target price,
+    cost basis uses today's live quote, and P&L = (target - live) x qty."""
+    created = _create_portfolio(client).get_json()
+
+    monkeypatch.setattr(
+        portfolios_module,
+        "_price_service",
+        lambda: type(
+            "S",
+            (),
+            {
+                "get_current_price": staticmethod(lambda symbol: {"AAPL": 190.0, "MSFT": 310.0}[symbol]),
+                "get_security_info": staticmethod(
+                    lambda symbol: {"name": symbol, "exchange": "NASDAQ", "currency": "USD", "sector": "Technology"}
+                ),
+            },
+        )(),
+    )
+
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if",
+        json={
+            "scenario_name": "sandbox basket",
+            "symbols": ["AAPL", "MSFT"],
+            "quantities": {"AAPL": 10, "MSFT": 5},
+            "prices": {"AAPL": 150.0, "MSFT": 220.0},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    aapl, msft = body["holdings"]
+    # AAPL: 10 x 150 target = 1500 market value; 10 x 190 live = 1900 cost.
+    assert aapl["market_value"] == 1500.0
+    assert aapl["cost_basis"] == 1900.0
+    assert aapl["profit_loss"] == -400.0
+    # MSFT: 5 x 220 = 1100; 5 x 310 = 1550.
+    assert msft["market_value"] == 1100.0
+    assert msft["cost_basis"] == 1550.0
+    assert msft["profit_loss"] == -450.0
+    assert body["current_value"] == 2600.0
+    assert body["invested_value"] == 3450.0
+    assert body["profit_loss"] == -850.0
+
+
+def test_portfolio_what_if_manual_override_never_revalues_cash(client, monkeypatch):
+    """A price override must never revalue the portfolio's cash component — cash
+    stays at face value regardless of the hypothetical price entered."""
+    created = _create_portfolio(client).get_json()
+    # Park $1,000 in portfolio cash, plus 10 AAPL @ 100.
+    client.post("/api/wallet/deposit", json={"amount": 3000.0, "currency": "USD"})
+    client.post(f"/api/portfolios/{created['id']}/deposit", json={"amount": 1000.0, "currency": "USD"})
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if",
+        json={"scenario_name": "crash", "price": 250.0},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    cash = next(h for h in body["holdings"] if h["symbol"] == "USD-CASH")
+    # Cash stays at face value (1,000), not $1.25M.
+    assert cash["market_value"] == 1000.0
+    assert cash["cost_basis"] == 1000.0
+    # AAPL is revalued to 250 each.
+    aapl = next(h for h in body["holdings"] if h["symbol"] == "AAPL")
+    assert aapl["market_value"] == 2500.0
+
+
+def test_portfolio_what_if_sandbox_rejects_cash_symbol(client, monkeypatch):
+    """A cash symbol in the sandbox basket must fail cleanly (and persist
+    nothing) rather than crash on a missing live quote."""
+    created = _create_portfolio(client).get_json()
+
+    monkeypatch.setattr(
+        portfolios_module,
+        "_price_service",
+        lambda: type(
+            "S",
+            (),
+            {
+                "get_current_price": staticmethod(lambda symbol: 310.0),
+                "get_security_info": staticmethod(lambda symbol: {"name": "Microsoft", "exchange": "NASDAQ", "currency": "USD", "sector": "Technology"}),
+            },
+        )(),
+    )
+
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if",
+        json={"scenario_name": "cash sandbox", "symbol": "USD-CASH", "price": 100.0},
+    )
+    assert resp.status_code == 400
+    assert "cash" in resp.get_json()["error"].lower()
+    assert WhatifPrice.query.filter_by(portfolio_id=created["id"], scenario_name="cash sandbox").first() is None
 
 
 def test_buy_and_sell_endpoints(client):

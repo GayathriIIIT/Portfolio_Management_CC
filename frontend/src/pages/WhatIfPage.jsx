@@ -92,6 +92,10 @@ export function WhatIfPage({ portfolio }) {
       setError('Please provide a valid ticker symbol and positive quantity');
       return;
     }
+    if (String(sym).endsWith('-CASH')) {
+      setError('Cash (e.g. USD-CASH) has no tradable price — add a real ticker to the sandbox');
+      return;
+    }
     setError(null);
     
     setSandboxBasket((prev) => {
@@ -204,10 +208,18 @@ export function WhatIfPage({ portfolio }) {
     }
   };
 
-  // List of active symbols depending on portfolio vs sandbox scope
+  // List of active symbols depending on portfolio vs sandbox scope. Portfolio
+  // cash components ({CCY}-CASH) are excluded — they have no target price to
+  // enter and are never revalued, so don't force a price for them.
+  const isCashSymbol = (s) => String(s || '').toUpperCase().endsWith('-CASH');
   const activeSymbols = simScope === 'sandbox'
     ? sandboxBasket.map((item) => item.symbol)
-    : (portfolio.holdings ? portfolio.holdings.map((h) => h.symbol) : []);
+    : (portfolio.holdings ? portfolio.holdings.map((h) => h.symbol).filter((s) => !isCashSymbol(s)) : []);
+
+  // Sandbox results carry portfolio_id = null; portfolio-mode results carry the
+  // real id. For the results table label, a portfolio run shows the simulated
+  // price, while a sandbox run shows the live quote used as its cost basis.
+  const isSandboxResult = !!simulationResult && simulationResult.portfolio_id == null;
 
   return (
     <div>
@@ -495,7 +507,7 @@ export function WhatIfPage({ portfolio }) {
                     <tr>
                       <th>Symbol</th>
                       <th style={{ textAlign: 'right' }}>Hyp. / Cost Price</th>
-                      <th style={{ textAlign: 'right' }}>Current Price</th>
+                      <th style={{ textAlign: 'right' }}>{isSandboxResult ? 'Current Price' : 'Simulated Price'}</th>
                       <th style={{ textAlign: 'right' }}>Market Value</th>
                       <th style={{ textAlign: 'right' }}>P&L</th>
                       <th style={{ textAlign: 'right' }}>P&L %</th>

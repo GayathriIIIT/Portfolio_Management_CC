@@ -65,10 +65,13 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
     security_type = holding.security.type
     sec_currency = holding.security.currency or "USD"
 
-    if override_prices is not None and symbol in override_prices:
-        raw_current_price = float(override_prices[symbol])
-    elif security_type in ("CASH"):
+    if security_type in ("CASH"):
+        # Cash is always carried at face value — a price override must never
+        # revalue a parked cash position (a $250 target would otherwise turn
+        # $5k of cash into $1.25M).
         raw_current_price = raw_purchase_price
+    elif override_prices is not None and symbol in override_prices:
+        raw_current_price = float(override_prices[symbol])
     else:
         try:
             raw_current_price = float(_price_service().get_current_price(symbol))
@@ -601,7 +604,19 @@ def _parse_quantities(payload, symbols):
     return quantities
 
 
-def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None):
+def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None, base_currency="USD"):
+    """Standalone "sandbox cart valuation.
+
+    The user enters a hypothetical (target) price for each basket symbol. That target
+    becomes the portfolio's hypothetical market value, while the basket's live
+    price is today's cost to build the basket (the cost basis:
+    ``market_value = target x qty ` and ``cost_basis = live x qty``). P&L is
+    therefore (target - live) x qty, matching portfolio mode where the override price
+    is revalued and the real purchase price is the cost basis (never the reverse as it was).
+    Foreign-currency symbols are converted to ``base_currency`` so the sandbox
+    reports on the same footing as portfolio mode. Cash symbols are rejected up front — a cash
+    position has no tradeable quote and can't be simulated.
+    """
     quantities = quantities or {}
     invested_value = 0.0
     current_value = 0.0
@@ -611,14 +626,30 @@ def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None):
         quantity = float(quantities.get(symbol, 1.0))
         if symbol not in override_prices:
             raise ApiError(f"Missing hypothetical price for symbol '{symbol}'")
+        if _parse_cash_symbol(symbol) is not None or symbol in CASH_SUGGESTION_SYMBOLS:
+            raise ApiError(
+                f"'{symbol}' is cash, not a tradeable security — add a real ticker to the sandbox"
+            )
 
-        hypothetical_price = float(override_prices[symbol])
+        target_price = float(override_prices[symbol])
         try:
-            current_price = float(_price_service().get_current_price(symbol))
+            live_price = float(_price_service().get_current_price(symbol))
         except UnknownTickerError as exc:
             raise ApiError(str(exc), status_code=400) from exc
-        market_value = current_price * quantity
-        cost_basis = hypothetical_price * quantity
+
+        # Convert both the live quote and the target into the base currency so
+        # the sandbox matches portfolio-mode reporting. Fall back to 1.0 so a
+        # missing quote / FX rate never crashes the simulation.
+        fx_rate = 1.0
+        try:
+            info = _price_service().get_security_info(symbol) or {}
+            sec_curr = (info.get("currency") or "USD").upper()
+            fx_rate = _price_service().get_fx_rate(sec_curr, base_currency) or 1.0
+        except Exception:
+            fx_rate = 1.0
+
+        market_value = target_price * quantity * fx_rate
+        cost_basis = live_price * quantity * fx_rate
         profit_loss = market_value - cost_basis
         profit_loss_percentage = (profit_loss / cost_basis * 100) if cost_basis else 0.0
 
@@ -628,17 +659,18 @@ def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None):
             {
                 "symbol": symbol,
                 "quantity": quantity,
-                "hypothetical_price": hypothetical_price,
-                "current_price": current_price,
-                "market_value": market_value,
-                "cost_basis": cost_basis,
-                "profit_loss": profit_loss,
-                "profit_loss_percentage": profit_loss_percentage,
+                "hypothetical_price": round(target_price * fx_rate, 4),
+                "current_price": round(live_price * fx_rate, 4),
+                "market_value": round(market_value, 4),
+                "cost_basis": round(cost_basis, 4),
+                "profit_loss": round(profit_loss, 4),
+                "profit_loss_percentage": round(profit_loss_percentage, 4),
             }
         )
 
     return {
         "portfolio_id": None,
+        "base_currency": base_currency,
         "invested_value": invested_value,
         "current_value": current_value,
         "profit_loss": current_value - invested_value,
@@ -1498,6 +1530,19 @@ def portfolio_what_if(portfolio_id):
         raise ApiError("Provide either 'prices', 'price', or 'date' in the request payload")
 
     try:
+        # Compute metrics BEFORE persisting anything: if the simulation fails
+        # (bad ticker, missing override, cash symbol in the sandbox), we never
+        # write WhatifPrice rows, so a failed run can't leave stale ledger state.
+        if custom_symbols:
+            result = _compute_symbol_cart_metrics(
+                custom_symbols,
+                override_prices,
+                quantities=quantities,
+                base_currency=portfolio.base_currency or "USD",
+            )
+        else:
+            result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
+
         for symbol, value in override_prices.items():
             security = _get_or_create_security(symbol)
             existing_row = WhatifPrice.query.filter_by(
@@ -1524,11 +1569,6 @@ def portfolio_what_if(portfolio_id):
                 existing_row.price_source = price_mode
 
         db.session.commit()
-
-        if custom_symbols:
-            result = _compute_symbol_cart_metrics(custom_symbols, override_prices, quantities=quantities)
-        else:
-            result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
 
         result["scenario_name"] = scenario_name
         return jsonify(result)
