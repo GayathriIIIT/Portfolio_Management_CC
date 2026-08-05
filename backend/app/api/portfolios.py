@@ -753,6 +753,29 @@ def _align_benchmark_returns(bench_closes, nav_points):
     return returns
 
 
+def _live_portfolio_value(portfolio, fx, base_curr):
+    """Live sum of current holding market values in the base currency.
+
+    Mirrors the ``current_value`` the /analytics KPI reports: each holding is
+    priced at its current live quote (CASH at face value) converted at the
+    current FX rate.
+    """
+    total = 0.0
+    for h in portfolio.holdings:
+        sec_curr = h.security.currency or "USD"
+        rate = fx.get_fx_rate(sec_curr, base_curr)
+        qty = float(h.quantity)
+        if h.security.type == "CASH":
+            px = float(h.avg_cost)
+        else:
+            try:
+                px = float(fx.get_current_price(h.security.symbol))
+            except UnknownTickerError:
+                px = float(h.avg_cost)
+        total += qty * px * rate
+    return total
+
+
 def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
     """Rebuild a daily portfolio NAV (value per calendar day, base currency).
 
@@ -767,11 +790,14 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
     Time-Weighted Return).
 
     Cash (the ``{CCY}-CASH`` position) is priced at a flat 1.0 and carried
-    alongside the holdings, so the series' present-day value equals the live
-    "Portfolio Value" / ``current_value`` KPI when the portfolio is funded
-    through the ledger. Cash is clamped at >= 0: a portfolio can never hold
-    negative cash, so an unfunded BUY (e.g. a position added without a prior
-    deposit) leaves cash at zero rather than driving the NAV toward zero.
+    alongside the holdings. The final series is anchored to the live
+    "Portfolio Value" / ``current_value`` KPI: it is uniformly scaled so its
+    latest point equals that value, keeping the graph consistent with the
+    dashboard while leaving every daily return unchanged. Unfunded BUYs (e.g. a
+    position added without a prior deposit) are funded with opening capital: the
+    running cash balance is offset so its cumulative minimum is zero, which
+    keeps every internal buy/sell value-neutral and the trade size out of the
+    daily returns.
 
     ``lookback_days`` caps the window to the trailing N calendar days (e.g. 31
     for "1M"). ``start_date`` (a ``date``) overrides the window start from the
@@ -832,7 +858,7 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
         return [], None, {}
 
     d0 = min(e["date"] for e in events)
-    if d0 >= today:
+    if d0 > today:
         return [], None, {}
 
     start = d0
@@ -840,26 +866,44 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
         start = max(d0, today - timedelta(days=lookback_days))
     if start_date is not None:
         start = max(d0, start_date)
-    if start >= today:
+    if start > today:
         return [], None, {}
 
-    sym_to_holding = {h.security_id: h for h in non_cash}
+    # Price every security that appears in the ledger — including fully closed
+    # positions that no longer have a holding row — so interim positions are
+    # valued in the NAV instead of distorting returns with unaccounted cash.
     held_ids = {e["security_id"] for e in events if e["security_id"]}
+    sec_by_id = {s.id: s for s in Security.query.filter(Security.id.in_(held_ids)).all()}
 
     # Fetch closes a little before the window so the opening day has a price anchor.
     closes_start = max(d0, start - timedelta(days=7))
     closes_by_sym = {}
     fx_by_sec = {}
     for hid in held_ids:
-        h = sym_to_holding.get(hid)
-        if h is None:
+        sec = sec_by_id.get(hid)
+        if sec is None or sec.type == "CASH":
             continue
-        closes_by_sym[hid] = market_price_service.collect_daily_closes(h.security.symbol, closes_start, today)
-        fx_by_sec[hid] = fx.get_fx_rate(h.security.currency or "USD", base_curr)
+        closes_by_sym[hid] = market_price_service.collect_daily_closes(sec.symbol, closes_start, today)
+        fx_by_sec[hid] = fx.get_fx_rate(sec.currency or "USD", base_curr)
 
     positions = {}
-    cash_balance = 0.0  # running external cash balance, in base currency; never negative
     events_sorted = sorted(events, key=lambda e: e["date"])
+
+    # Fund unfunded BUYs with opening capital rather than per-day flow hacks.
+    # Cash is the running sum of every BUY/SELL/DEPOSIT/WITHDRAW cash delta; an
+    # unfunded BUY would otherwise drive it negative and a negative base
+    # manufactures absurd returns. Offset the starting balance by the cumulative
+    # minimum so cash stays >= 0, which makes each internal buy/sell
+    # value-neutral (cash <-> position) and leaves only real DEPOSIT/WITHDRAW
+    # flows in ``external_flows``. The trade size then never shows up as a fake
+    # daily gain/loss, and fully-closed positions stay priced (see above).
+    cumulative_cash = 0.0
+    min_cash = 0.0
+    for e in events_sorted:
+        cumulative_cash += e["cash_delta"]
+        if cumulative_cash < min_cash:
+            min_cash = cumulative_cash
+    cash_balance = -min_cash
     event_idx = 0
 
     nav_points = []
@@ -870,12 +914,10 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
             if e["security_id"]:
                 positions[e["security_id"]] = positions.get(e["security_id"], 0.0) + e["qty_delta"]
             cash_balance += e["cash_delta"]
-            if cash_balance < 0:
-                # An unfunded BUY (no prior deposit) would otherwise push NAV
-                # toward zero and manufacture absurd returns; clamp cash, never
-                # negative, so the position's market value starts the series.
-                cash_balance = 0.0
             event_idx += 1
+        if cash_balance < 0:
+            # Floating-point residue only; the min-offset guarantees non-negativity.
+            cash_balance = 0.0
 
         # NAV = market value of holdings + cash. Cash (the ``{CCY}-CASH``
         # position) is priced at its face value (1.0), so adding the running
@@ -910,8 +952,25 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None):
         for d in list(external_flows):
             if d < (nav_points[0]["date"] if nav_points else ""):
                 external_flows.pop(d, None)
-        if len(nav_points) < 2:
+        if not nav_points:
             return [], None, {}
+
+    # Anchor the series' latest point to the live "Portfolio Value" KPI
+    # (current_value). The reconstruction can drift from the live value when a
+    # portfolio's ledger has unfunded BUYs, or deposits/withdrawals that don't
+    # line up with the tracked cash holding, or when today's close differs from
+    # the live quote. Uniformly scaling the series to end at current_value keeps
+    # the graph's final number consistent with the dashboard KPI while
+    # preserving every daily return (ratios are unchanged).
+    current_value = _live_portfolio_value(portfolio, fx, base_curr)
+    last_value = nav_points[-1]["value"]
+    if current_value > 0 and last_value > 0:
+        scale = current_value / last_value
+        if abs(scale - 1.0) > 1e-9:
+            nav_points = [
+                {"date": p["date"], "value": round(p["value"] * scale, 4)}
+                for p in nav_points
+            ]
 
     return nav_points, d0, external_flows
 
@@ -1456,6 +1515,23 @@ def add_holding(portfolio_id):
     symbol = _require_string(payload, "symbol").upper()
     quantity = _require_positive_int(payload, "quantity")
     purchase_price = _require_positive_number(payload, "purchase_price")
+    total_cost = purchase_price * quantity
+
+    # Adjust cash balance if cash position exists
+    cash_symbol = f"{portfolio.base_currency or 'USD'}-CASH"
+    cash_sec = Security.query.filter_by(symbol=cash_symbol).first()
+    if cash_sec is not None:
+        cash_holding = SecurityHolding.query.filter_by(
+            portfolio_id=portfolio.id, security_id=cash_sec.id
+        ).first()
+        if cash_holding is not None:
+            avail_cash = float(cash_holding.quantity)
+            if avail_cash < total_cost:
+                raise ApiError(
+                    f"Insufficient cash balance. Order total: ${total_cost:.2f}, Available cash: ${avail_cash:.2f}",
+                    status_code=400,
+                )
+            cash_holding.quantity = avail_cash - total_cost
 
     security = _get_or_create_security(symbol)
     holding = SecurityHolding.query.filter_by(

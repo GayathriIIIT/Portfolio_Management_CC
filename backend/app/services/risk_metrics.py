@@ -29,9 +29,12 @@ def _daily_returns(nav_values, external_flows=None):
     ``nav_values[i]``. Deposits and withdrawals are not investment returns, so
     they are subtracted from the day's change before dividing by the prior
     value. This is what makes a Time-Weighted Return honest: a +$1000 deposit
-    no longer reads as a +108% "best day". BUY/SELL legs are *internal* (cash
-    moves between positions) and are left in place — their net effect on NAV
-    is ~fees only, already reflected in the value.
+    no longer reads as a +108% "best day". Funded BUY/SELL legs are *internal*
+    (cash moves between positions) and are left in place — their net effect on
+    NAV is ~fees only. An *unfunded/oversized* BUY, however, is capital that
+    the reconstruction invents (cash is clamped at 0), so its amount is also
+    reported here as a same-day inflow; subtraction keeps the buy's size from
+    masquerading as market profit.
 
     A buy funded by cash the ledger doesn't model leaves the opening day's net
     value ~0; dividing by that near-zero base produces astronomically large
@@ -143,9 +146,22 @@ def compute_risk_metrics(nav_values, bench_returns=None, rf_pct=4.0,
     flows_present = bool(external_flows and any(
         (f or 0) != 0 for f in external_flows[:len(nav_values)]))
 
+    # Max drawdown must be flow-clean too: a DEPOSIT creates a fake peak and a
+    # WITHDRAWAL a fake trough on the raw NAV, so when external flows are
+    # present we rebuild a flow-adjusted curve (geometric link of the daily
+    # returns) and measure drawdown against that instead of the ledger-jumpy
+    # values. Best/worst day and volatility already use the flow-adjusted
+    # returns, so they are unaffected by buy/sell/deposit size.
+    if flows_present and returns:
+        drawdown_nav = [nav_values[0]]
+        for r in returns:
+            drawdown_nav.append(drawdown_nav[-1] * (1.0 + r))
+    else:
+        drawdown_nav = nav_values
+
     metrics = {
         "total_return": None,
-        "max_drawdown": _max_drawdown(nav_values),
+        "max_drawdown": _max_drawdown(drawdown_nav),
         "period_volatility": None,
         "best_day": None,
         "worst_day": None,

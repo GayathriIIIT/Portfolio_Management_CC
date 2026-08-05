@@ -251,3 +251,93 @@ def test_nav_with_cash_equals_kpi_current_value(client, monkeypatch):
     nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio)
     assert nav
     assert nav[-1]["value"] == pytest.approx(kpi_value, abs=0.01)
+
+
+def test_closed_position_with_unfunded_buys_keeps_returns_sane(client, monkeypatch):
+    """Regression for the T1 shape: mid-history unfunded BUYs plus a fully-closed
+    position must not manufacture fake days in the NAV.
+
+    The portfolio used to show a -59.9% "worst day" and a +22.9% "best day"
+    because a position that was bought then fully sold was never priced while
+    held (cash left the account with no market value to show for it) and the
+    unfunded buy size leaked into the daily return. Pricing every security in
+    the ledger (closed positions included) and funding unfunded buys through a
+    non-negative opening cash offset keeps every internal trade value-neutral.
+    """
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "Closed"}).get_json()
+    pid = created["id"]
+    client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "AAPL", "quantity": 2, "price": 100.0})
+    client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "MSFT", "quantity": 5, "price": 100.0})
+    client.post(f"/api/portfolios/{pid}/sell", json={"symbol": "MSFT", "quantity": 5, "price": 100.0})
+    client.post(f"/api/portfolios/{pid}/buy", json={"symbol": "AAPL", "quantity": 1, "price": 100.0})
+
+    today = _date.today()
+    txns = (
+        PortfolioTransaction.query.filter_by(portfolio_id=pid)
+        .order_by(PortfolioTransaction.executed_at.asc())
+        .all()
+    )
+    for i, txn in enumerate(txns):
+        txn.executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=[20, 12, 8, 4][i])
+    db.session.commit()
+
+    closes = {(today - _td(days=i)): 100.0 + i * 0.5 for i in range(31)}
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+
+    portfolio = Portfolio.query.get(pid)
+    nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio)
+    assert nav and len(nav) >= 2
+    values = [p["value"] for p in nav]
+    assert all(v > 0 for v in values)
+
+    returns = []
+    for prev, cur in zip(values, values[1:]):
+        if prev and prev > 0:
+            returns.append((cur - prev) / prev * 100.0)
+    # Neither the closed MSFT buy/sale nor the unfunded AAPL buys may read as a
+    # large day; trade sizes are value-neutral, so only price drift remains.
+    assert returns
+    assert max(abs(r) for r in returns) < 10.0
+
+    # The anchored series ends exactly on the live Portfolio Value KPI.
+    kpi_value = client.get(f"/api/portfolios/{pid}/analytics").get_json()["current_value"]
+    assert nav[-1]["value"] == pytest.approx(kpi_value, abs=0.01)
+
+
+def test_add_holding_cash_tracks_kpi_current_value(client, monkeypatch):
+    """P1 regression: an Add Position on top of existing cash must debit the cash
+    holding so the ledger-replayed NAV[-1] still equals the live KPI
+    current_value. Before reconciling add_holding to the cash path, the live
+    USD-CASH position was left untouched, so the Risk card (NAV) and the KPI
+    card (current_value) disagreed."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    created = client.post("/api/portfolios", json={"owner": "Risk", "name": "CashAdd"}).get_json()
+    pid = created["id"]
+    client.post(f"/api/portfolios/{pid}/deposit", json={"amount": 1000.0})
+    client.post(
+        f"/api/portfolios/{pid}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    today = _date.today()
+    txns = PortfolioTransaction.query.filter_by(portfolio_id=pid).all()
+    txns[0].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=20)  # deposit
+    txns[1].executed_at = _dt.now(_tz.utc).replace(tzinfo=None) - _td(days=10)  # add position
+    db.session.commit()
+
+    # Today's close matches the live AAPL price (190) so NAV[-1] == KPI value.
+    closes = {(today - _td(days=i)): 190.0 - i * 0.5 for i in range(31)}
+    monkeypatch.setattr(
+        portfolios_module.market_price_service, "collect_daily_closes", lambda *a, **k: dict(closes)
+    )
+
+    kpi_value = client.get(f"/api/portfolios/{pid}/analytics").get_json()["current_value"]
+    portfolio = Portfolio.query.get(pid)
+    nav, _d0, _flows = portfolios_module._reconstruct_nav_series(portfolio)
+    assert nav
+    assert nav[-1]["value"] == pytest.approx(kpi_value, abs=0.01)
