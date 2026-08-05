@@ -28,6 +28,7 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
   const [metrics, setMetrics] = useState(null);
   const [recommendation, setRecommendation] = useState(null);
   const [nav, setNav] = useState([]);
+  const [chart, setChart] = useState([]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -42,6 +43,7 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
         setMetrics(res.metrics || null);
         setRecommendation(res.recommendation || null);
         setNav(res.nav || []);
+        setChart(res.chart || []);
       })
       .catch((err) => {
         if (isMounted) setError(err.message);
@@ -157,7 +159,11 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
               <div style={{ width: '100%', height: 240 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
-                    data={nav.map((pt) => ({ date: pt.date, price: Number(pt.value) || 0 }))}
+                    data={
+                      chart.length >= 2
+                        ? chart.map((pt) => ({ date: pt.timestamp, price: Number(pt.price) || 0 }))
+                        : nav.map((pt) => ({ date: pt.date, price: Number(pt.value) || 0 }))
+                    }
                     margin={{ top: 5, right: 20, left: 10, bottom: 0 }}
                   >
                     <defs>

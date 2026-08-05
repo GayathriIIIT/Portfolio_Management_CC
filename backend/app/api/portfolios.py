@@ -1255,6 +1255,7 @@ def get_stock_analytics():
         "metrics": None,
         "recommendation": None,
         "nav": [],
+        "chart": [],
         "benchmark": "SPY",
         "range": range_key,
     }
@@ -1340,6 +1341,15 @@ def get_stock_analytics():
     except Exception:
         name = None
 
+    # Higher-frequency series for the chart (intraday bars on short ranges) so
+    # intraday volatility shows instead of a flat line of daily closes. Daily
+    # `nav` still drives the risk metrics.
+    chart = []
+    try:
+        chart = market_price_service.collect_stock_chart_series(symbol, range_key)
+    except Exception:
+        chart = []
+
     return jsonify(
         {
             "symbol": symbol,
@@ -1347,6 +1357,7 @@ def get_stock_analytics():
             "metrics": metrics,
             "recommendation": recommendation,
             "nav": nav,
+            "chart": chart,
             "benchmark": "SPY",
             "range": range_key,
         }

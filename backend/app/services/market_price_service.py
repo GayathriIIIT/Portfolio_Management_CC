@@ -371,6 +371,45 @@ def collect_daily_closes(symbol, start_date, end_date):
     return closes
 
 
+def _collect_history(period, interval, start, end, symbol):
+    """Thin wrapper around yfinance history with stdout/stderr silenced."""
+    ticker = yf.Ticker(symbol)
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        if period is not None:
+            return ticker.history(period=period, interval=interval, auto_adjust=False)
+        return ticker.history(start=start, end=end, interval=interval, auto_adjust=False)
+
+
+def collect_stock_chart_series(symbol, range_key="1y"):
+    """Granular price points for a single-stock analytics graph.
+
+    For short ranges this samples intraday bars (1h) so intraday volatility is
+    visible on the chart instead of a flat line of daily closes. Longer ranges
+    (6m, 1y) have no finer-than-daily data from Yahoo, so they stay daily.
+    Returns a list of ``{timestamp, price}`` dicts.
+    """
+    from datetime import date as _date
+
+    normalized = (range_key or "1y").lower()
+    today = _date.today()
+
+    period, interval, start, end = None, None, None, None
+    if normalized == "1m":
+        period, interval = "1mo", "1h"
+    elif normalized == "3m":
+        start = (today - timedelta(days=92)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+        interval = "1h"
+    else:
+        period, interval, start, end = _chart_period_interval(normalized)
+
+    try:
+        history = _collect_history(period, interval, start, end, symbol)
+    except Exception:
+        return []
+    return _format_chart_points(history)
+
+
 def collect_and_store_price_series(symbol, security_id, range_key="1d", db_session=None):
     """Collect a chart-ready price series for the given range.
 
