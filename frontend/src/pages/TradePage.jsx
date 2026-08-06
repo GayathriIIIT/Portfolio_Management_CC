@@ -121,7 +121,10 @@ export function TradePage({ portfolio, walletBalance = 0, currency = 'USD', onTr
         if (isNaN(priceVal) || priceVal <= 0) {
           throw new Error('Execution price must be a positive number');
         }
-        const buyTotal = priceVal * qty + feeVal;
+        // Native order total converted into the base-currency wallet so a
+        // foreign-currency order is checked against the wallet in the same
+        // currency it settles in (matches the backend's settlement math).
+        const buyTotal = (priceVal * qty + feeVal) * fxRate;
         if (buyTotal > walletBalance) {
           throw new Error(
             `Insufficient wallet balance. Order total: ${currency} ${buyTotal.toFixed(2)}, Available: ${currency} ${walletBalance.toFixed(2)}`
@@ -496,7 +499,8 @@ export function TradePage({ portfolio, walletBalance = 0, currency = 'USD', onTr
                         <span style={{ fontWeight: '700', fontSize: '0.95rem' }}>{t.symbol}</span>
                       </div>
                       <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                        {t.quantity} shares @ ${Number(t.price || 0).toFixed(2)} (Fee: ${Number(t.fees || 0).toFixed(2)})
+                        {t.quantity} shares @ ${(Number(t.price_base ?? t.price) || 0).toFixed(2)} (Fee: ${(Number(t.fees_base ?? t.fees) || 0).toFixed(2)})
+                        {t.currency && t.currency !== 'USD' && ` (${t.currency} ${Number(t.price || 0).toFixed(2)} native)`}
                       </div>
                     </div>
 

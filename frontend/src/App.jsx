@@ -13,6 +13,7 @@ import { TradePage } from './pages/TradePage';
 import { TransactionsPage } from './pages/TransactionsPage';
 import { WhatIfPage } from './pages/WhatIfPage';
 import { PortfoliosPage } from './pages/PortfoliosPage';
+import { ReportPage } from './pages/ReportPage';
 
 import { TradeModal } from './components/TradeModal';
 import { AddHoldingModal } from './components/AddHoldingModal';
@@ -31,6 +32,7 @@ export function AppContent() {
   const [analytics, setAnalytics] = useState(null);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isBackfilling, setIsBackfilling] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isPortfolioLoading, setIsPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState(null);
@@ -51,6 +53,7 @@ export function AppContent() {
 
   // Guards the auto-refresh so overlapping live-price fetches never pile up.
   const refreshInFlight = useRef(false);
+  const backfillInFlight = useRef(false);
 
   // Modals
   const [tradeModal, setTradeModal] = useState({ isOpen: false, type: 'BUY', symbol: '' });
@@ -188,6 +191,24 @@ export function AppContent() {
     }
   }, [selectedPortfolioId, refreshPortfolioData]);
 
+  // Backfill historical daily closes into the price cache, then refresh so
+  // charts/NV reconstruct from the durable cache instead of live Yahoo.
+  const handleBackfillHistory = useCallback(async () => {
+    const pid = selectedPortfolioId;
+    if (!pid || backfillInFlight.current) return;
+    backfillInFlight.current = true;
+    setIsBackfilling(true);
+    try {
+      await api.backfillPrices(pid);
+      refreshPortfolioData();
+    } catch (err) {
+      console.error('Failed to backfill history:', err);
+    } finally {
+      setIsBackfilling(false);
+      backfillInFlight.current = false;
+    }
+  }, [selectedPortfolioId, refreshPortfolioData]);
+
   // Auto-refresh live prices every 2 minutes on the main dashboard so the
   // Portfolio Value KPI stays current without needing the manual button. The
   // handler self-guards against overlap, so no extra flag is needed here.
@@ -203,16 +224,10 @@ export function AppContent() {
     setTradeModal({ isOpen: true, type, symbol });
   };
 
-  const handleDeleteHolding = async (holdingId) => {
+  const handlePriceOverride = async (holdingId, price) => {
     if (!selectedPortfolioId) return;
-    if (window.confirm('Are you sure you want to remove this security holding?')) {
-      try {
-        await api.deleteHolding(selectedPortfolioId, holdingId);
-        refreshPortfolioData();
-      } catch (err) {
-        alert(`Error deleting holding: ${err.message}`);
-      }
-    }
+    await api.setHoldingPriceOverride(selectedPortfolioId, holdingId, price);
+    refreshPortfolioData();
   };
 
   const handleCreatedNewPortfolio = (newId) => {
@@ -250,6 +265,8 @@ export function AppContent() {
           walletBalance={walletBalance}
           walletCurrency={walletCurrency}
           isRefreshing={isRefreshing}
+          onBackfillHistory={handleBackfillHistory}
+          isBackfilling={isBackfilling}
         />
 
         <UserTour />
@@ -281,7 +298,7 @@ export function AppContent() {
                       analytics={analytics}
                       refreshKey={dataVersion}
                       onOpenTradeModal={handleOpenTradeModal}
-                      onDeleteHolding={handleDeleteHolding}
+                      onPriceOverride={handlePriceOverride}
                       onOpenAddModal={() => setIsAddModalOpen(true)}
                       onOpenCashModal={(action) => {
                         setIsWalletModalOpen(false);
@@ -296,7 +313,7 @@ export function AppContent() {
                       portfolio={activePortfolio}
                       analytics={analytics}
                       onOpenTradeModal={handleOpenTradeModal}
-                      onDeleteHolding={handleDeleteHolding}
+                      onPriceOverride={handlePriceOverride}
                       onOpenAddModal={() => setIsAddModalOpen(true)}
                       onOpenCashModal={(action) => {
                         setIsWalletModalOpen(false);
@@ -321,6 +338,10 @@ export function AppContent() {
 
                   {activeTab === 'what-if' && (
                     <WhatIfPage portfolio={activePortfolio} />
+                  )}
+
+                  {activeTab === 'report' && (
+                    <ReportPage portfolio={activePortfolio} analytics={analytics} />
                   )}
                 </>
               )}

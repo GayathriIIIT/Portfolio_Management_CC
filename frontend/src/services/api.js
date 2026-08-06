@@ -48,11 +48,13 @@ export const api = {
   },
   refreshPortfolioPrices: (id, payload = {}) => request(`${API_BASE}/${id}/refresh-prices`, { method: 'POST', body: payload }),
 
+  backfillPrices: (id) => request(`${API_BASE}/${id}/backfill-prices`, { method: 'POST' }),
+
   // Holdings
   getHoldings: (portfolioId) => request(`${API_BASE}/${portfolioId}/holdings`),
   addHolding: (portfolioId, payload) => request(`${API_BASE}/${portfolioId}/holdings`, { method: 'POST', body: payload }),
   updateHolding: (portfolioId, holdingId, payload) => request(`${API_BASE}/${portfolioId}/holdings/${holdingId}`, { method: 'PUT', body: payload }),
-  deleteHolding: (portfolioId, holdingId) => request(`${API_BASE}/${portfolioId}/holdings/${holdingId}`, { method: 'DELETE' }),
+  setHoldingPriceOverride: (portfolioId, holdingId, price) => request(`${API_BASE}/${portfolioId}/holdings/${holdingId}/price-override`, { method: 'PUT', body: { price } }),
 
   // Buy & Sell Trading
   buyHolding: (portfolioId, payload) => request(`${API_BASE}/${portfolioId}/buy`, { method: 'POST', body: payload }),
@@ -81,4 +83,13 @@ export const api = {
   // Per-security analytics (risk metrics + recommendation over a window)
   getStockAnalytics: (symbol, range = '1y') =>
     request(`${API_BASE}/market_price/analytics?symbol=${encodeURIComponent(symbol)}&range=${range}`),
+
+  // Similar-stock recommendations (rule-based)
+  getSimilarStocks: (symbol) => request(`${API_BASE}/market_price/similar?symbol=${encodeURIComponent(symbol)}`),
+
+  // Price alerts / price targets
+  getAlerts: () => request('/api/alerts'),
+  checkAlerts: () => request('/api/alerts/check', { method: 'POST' }),
+  createAlert: (payload) => request('/api/alerts', { method: 'POST', body: payload }),
+  deleteAlert: (id) => request(`/api/alerts/${id}`, { method: 'DELETE' }),
 };

@@ -26,6 +26,7 @@ const BENCHMARKS = [
   { id: 'QQQ', label: 'Nasdaq 100 (QQQ)' },
   { id: 'DIA', label: 'Dow Jones (DIA)' },
   { id: 'VT', label: 'World Stock (VT)' },
+  { id: 'CUSTOM', label: 'Custom…' },
   { id: 'NONE', label: 'None' },
 ];
 
@@ -68,6 +69,7 @@ function CustomTooltip({ active, payload, label, currency }) {
 export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD' }) {
   const [range, setRange] = useState('1m');
   const [benchmark, setBenchmark] = useState('SPY');
+  const [customBenchmark, setCustomBenchmark] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   
@@ -75,6 +77,9 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
   const [symbolsList, setSymbolsList] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState('');
   const [benchmarkData, setBenchmarkData] = useState(null);
+
+  const effectiveBenchmark =
+    benchmark === 'CUSTOM' ? (customBenchmark.trim().toUpperCase() || 'NONE') : benchmark;
 
   useEffect(() => {
     if (!portfolioId) return;
@@ -84,7 +89,7 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
     setError(null);
 
     api
-      .getPortfolioChartData(portfolioId, range, benchmark)
+      .getPortfolioChartData(portfolioId, range, effectiveBenchmark)
       .then((res) => {
         if (!isMounted) return;
         const allSeries = res.series || [];
@@ -110,7 +115,7 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
     return () => {
       isMounted = false;
     };
-  }, [portfolioId, range, benchmark, refreshKey]);
+  }, [portfolioId, range, effectiveBenchmark, refreshKey]);
 
   // Derive active series data and merge benchmark data
   const activeSeries = seriesList.find((s) => s.symbol === selectedSymbol);
@@ -126,9 +131,15 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
     if (!iso || !iso.includes('T')) return iso || 'N/A';
     const d = new Date(iso);
     if (isIntraday) {
-      // Show HH:MM in local time
       try {
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        // For multi-day intraday ranges (1W/1M), include the date so the
+        // trading day is clear even though points are spaced equally.
+        if (range !== '1d') {
+          const date = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          return `${date} ${time}`;
+        }
+        return time;
       } catch (_) {
         return iso.split('T')[1] ? iso.split('T')[1].substring(0, 5) : iso.split('T')[0];
       }
@@ -182,6 +193,7 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
           };
         })
         .filter((d) => Number.isFinite(d.time))
+        .map((d, i) => ({ ...d, index: i }))
     : [];
 
   return (
@@ -241,6 +253,16 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
                 </option>
               ))}
             </select>
+            {benchmark === 'CUSTOM' && (
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Ticker (e.g. ^NSEI, TSLA)"
+                value={customBenchmark}
+                onChange={(e) => setCustomBenchmark(e.target.value.toUpperCase())}
+                style={{ height: '32px', width: '130px', fontSize: '0.8rem', padding: '0 8px' }}
+              />
+            )}
           </div>
 
           {/* Time Range Selector */}
@@ -294,15 +316,17 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
               <XAxis
-                dataKey="time"
-                type="number"
-                scale="time"
-                domain={['dataMin', 'dataMax']}
+                dataKey="index"
+                type="category"
+                interval="equidistantPreserveStart"
                 stroke="var(--text-secondary)"
                 fontSize={12}
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(v) => labelForValue(v)}
+                tickFormatter={(v) => {
+                  const pt = chartData[v];
+                  return pt ? labelForValue(pt.rawTimestamp) : labelForValue(v);
+                }}
               />
               <YAxis
                 yAxisId="left"

@@ -22,6 +22,7 @@ const RANGES = [
 const RANGE_EXPECTED_DAYS = { '1m': 31, '3m': 92, '6m': 184, '1y': 366 };
 
 export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
+  const [viewSymbol, setViewSymbol] = useState(symbol);
   const [range, setRange] = useState('1y');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -29,15 +30,20 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
   const [recommendation, setRecommendation] = useState(null);
   const [nav, setNav] = useState([]);
   const [chart, setChart] = useState([]);
+  const [similar, setSimilar] = useState([]);
 
   useEffect(() => {
-    if (!symbol) return;
+    setViewSymbol(symbol);
+  }, [symbol]);
+
+  useEffect(() => {
+    if (!viewSymbol) return;
     let isMounted = true;
     setLoading(true);
     setError(null);
 
     api
-      .getStockAnalytics(symbol, range)
+      .getStockAnalytics(viewSymbol, range)
       .then((res) => {
         if (!isMounted) return;
         setMetrics(res.metrics || null);
@@ -52,10 +58,20 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
         if (isMounted) setLoading(false);
       });
 
+    api
+      .getSimilarStocks(viewSymbol)
+      .then((res) => {
+        if (!isMounted) return;
+        setSimilar(res.similar || []);
+      })
+      .catch(() => {
+        if (isMounted) setSimilar([]);
+      });
+
     return () => {
       isMounted = false;
     };
-  }, [symbol, range]);
+  }, [viewSymbol, range]);
 
   return (
     <div
@@ -68,7 +84,7 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '700', fontSize: '0.95rem' }}>
           <Activity size={16} style={{ color: 'var(--accent-primary)' }} />
-          <span>{symbol} — Risk Analytics</span>
+          <span>{viewSymbol} — Risk Analytics</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div
@@ -128,7 +144,7 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
 
       {loading ? (
         <div style={{ height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-          Fetching {symbol} risk indicators from Yahoo Finance...
+          Fetching {viewSymbol} risk indicators from Yahoo Finance...
         </div>
       ) : error ? (
         <div style={{ height: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--danger-text)' }}>
@@ -137,7 +153,7 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
       ) : !metrics ? (
         <div className="empty-state">
           <Activity className="empty-state-icon" />
-          <div>Not enough price history for {symbol} to compute risk metrics yet.</div>
+          <div>Not enough price history for {viewSymbol} to compute risk metrics yet.</div>
         </div>
       ) : (
         <>
@@ -154,7 +170,7 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
               }}
             >
               <div style={{ fontWeight: '700', fontSize: '0.85rem', marginBottom: '8px' }}>
-                {symbol} — Price History ({range})
+                {viewSymbol} — Price History ({range})
               </div>
               <div style={{ width: '100%', height: 240 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -225,6 +241,36 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
           )}
 
           <MetricGrid metrics={metrics} />
+
+          {similar.length > 0 && (
+            <div style={{ marginTop: '16px' }}>
+              <div className="analytics-section-label">Similar stocks</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {similar.map((s) => (
+                  <button
+                    key={s.symbol}
+                    className="btn btn-secondary"
+                    style={{
+                      justifyContent: 'space-between',
+                      fontSize: '0.8rem',
+                      padding: '8px 12px',
+                    }}
+                    title={`View ${s.symbol} analytics`}
+                    onClick={() => setViewSymbol(s.symbol)}
+                  >
+                    <span style={{ fontWeight: 700 }}>{s.symbol}</span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                      {s.name}
+                      {s.price != null ? ` · ${currency} ${Number(s.price).toFixed(2)}` : ''}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
+                Rule-based picks in the same sector, ranked by market-cap similarity to {viewSymbol}.
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

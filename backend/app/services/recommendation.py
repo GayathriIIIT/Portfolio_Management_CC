@@ -5,6 +5,11 @@ an ADD / HOLD / SELL signal with a list of human-readable reasons. The rules are
 deliberately conservative: a sub-year window can't support annualized metrics,
 so when no credible signal exists the engine returns INSUFFICIENT_DATA instead
 of forcing a buy/sell call on noise. This is educational, not financial advice.
+
+Risk signals evaluated: Sharpe, Sortino, Calmar (annualized return / max
+drawdown), max drawdown, beta, correlation to SPY, up/down capture, annualized
+volatility, Jensen's alpha, XIRR, worst-day tail risk, total return, plus
+fundamental valuation (P/E, dividend yield) and sector-concentration inputs.
 """
 
 
@@ -36,10 +41,33 @@ def generate_recommendation(risk, alpha=None, xirr=None, profit_loss_percentage=
             score -= 2
             reasons.append(f"Negative Sharpe ratio ({sharpe:.2f}) means returns trail the risk-free rate")
 
+    sortino = risk.get("sortino_ratio")
+    if sortino is not None:
+        if sortino >= 2.0:
+            score += 1
+            reasons.append(f"Sortino ratio {sortino:.2f} (>=2.0) — returns survive downside volatility well")
+        elif sortino < 0.0:
+            score -= 1
+            reasons.append(f"Negative Sortino ratio ({sortino:.2f}) — downside volatility is eroding gains")
+
     drawdown = risk.get("max_drawdown")
     if drawdown is not None and drawdown >= 25.0:
         score -= 2
         reasons.append(f"Max drawdown of {drawdown:.1f}% shows deep historical loss exposure")
+
+    # Calmar = annualized return per unit of max drawdown; both inputs are
+    # only meaningful once the window is long enough, and the gate below keeps
+    # the ratio from dividing by a flat (zero-drawdown) series.
+    calmar = None
+    annualized_return = risk.get("annualized_return")
+    if annualized_return is not None and drawdown is not None and drawdown > 0:
+        calmar = annualized_return / drawdown
+        if calmar >= 1.0:
+            score += 1
+            reasons.append(f"Calmar ratio {calmar:.2f} (>=1.0) — strong return per unit of drawdown risk")
+        elif calmar <= 0.2:
+            score -= 1
+            reasons.append(f"Calmar ratio {calmar:.2f} (<=0.2) — drawdowns are large relative to returns")
 
     beta = risk.get("beta")
     if beta is not None:
@@ -48,6 +76,14 @@ def generate_recommendation(risk, alpha=None, xirr=None, profit_loss_percentage=
             reasons.append(f"Beta {beta:.2f} (>1.3) swings harder than the market")
         elif beta < 0.8:
             reasons.append(f"Beta {beta:.2f} (<0.8) is calmer than the market")
+
+    corr = risk.get("correlation")
+    if corr is not None:
+        if corr < 0.5:
+            score += 1
+            reasons.append(f"Low correlation ({corr:.2f}) to the market — genuine diversification")
+        elif corr >= 0.9:
+            reasons.append(f"Highly correlated ({corr:.2f}) with the market — little diversification benefit")
 
     up = risk.get("up_capture")
     down = risk.get("down_capture")
@@ -58,6 +94,20 @@ def generate_recommendation(risk, alpha=None, xirr=None, profit_loss_percentage=
         elif down >= 120 and up <= 80:
             score -= 1
             reasons.append(f"Down capture {down:.0f}% is high while up capture is only {up:.0f}%")
+
+    ann_vol = risk.get("annualized_volatility")
+    if ann_vol is not None:
+        if ann_vol >= 40.0:
+            score -= 1
+            reasons.append(f"Annualized volatility of {ann_vol:.0f}% — moves are violent")
+        elif 0 < ann_vol <= 12.0:
+            score += 1
+            reasons.append(f"Low annualized volatility of {ann_vol:.0f}% — a stable, calm ride")
+
+    worst_day = risk.get("worst_day")
+    if worst_day is not None and worst_day <= -8.0:
+        score -= 1
+        reasons.append(f"Worst single day was {worst_day:.1f}% — meaningful left-tail risk")
 
     if alpha is not None:
         if alpha >= 2.0:

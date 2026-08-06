@@ -560,6 +560,79 @@ def test_buy_and_sell_settle_in_base_currency_at_fx(client, app, monkeypatch):
     assert eur_wallet["balance"] == 1936.0
 
 
+def test_holding_price_override_revalues_and_clears(client):
+    """A manual price override drives the holding's market value / P&L, and
+    clearing it reverts to the live quote — without writing a ledger row."""
+    created = _create_portfolio(client).get_json()
+    client.post("/api/wallet/deposit", json={"amount": 5000.0, "currency": "USD"})
+    buy = client.post(
+        f"/api/portfolios/{created['id']}/buy",
+        json={"symbol": "AAPL", "quantity": 2, "price": 100.0},
+    ).get_json()
+    holding_id = buy["holding"]["id"]
+
+    # AAPL mock live price is 190.0 -> market_value = 190 * 2 = 380.
+    holdings = client.get(f"/api/portfolios/{created['id']}/holdings").get_json()
+    aapl = next(h for h in holdings if h["symbol"] == "AAPL")
+    assert aapl["market_value"] == 380.0
+    assert aapl["price_override"] is None
+
+    # Override to a stale/known price (the bond use-case).
+    resp = client.put(
+        f"/api/portfolios/{created['id']}/holdings/{holding_id}/price-override",
+        json={"price": 150.0},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["market_value"] == 300.0
+    assert resp.get_json()["price_override"] == 150.0
+
+    # Clearing reverts to live.
+    resp = client.put(
+        f"/api/portfolios/{created['id']}/holdings/{holding_id}/price-override",
+        json={"price": None},
+    )
+    assert resp.get_json()["market_value"] == 380.0
+    assert resp.get_json()["price_override"] is None
+
+
+def test_price_override_rejects_invalid(client):
+    created = _create_portfolio(client).get_json()
+    client.post("/api/wallet/deposit", json={"amount": 5000.0, "currency": "USD"})
+    holding_id = client.post(
+        f"/api/portfolios/{created['id']}/buy",
+        json={"symbol": "AAPL", "quantity": 1, "price": 100.0},
+    ).get_json()["holding"]["id"]
+
+    resp = client.put(
+        f"/api/portfolios/{created['id']}/holdings/{holding_id}/price-override",
+        json={"price": -5},
+    )
+    assert resp.status_code == 400
+
+
+def test_price_override_whatif_wins_over_override(client):
+    """A what-if hypothetical price takes precedence over a manual override."""
+    created = _create_portfolio(client).get_json()
+    client.post("/api/wallet/deposit", json={"amount": 5000.0, "currency": "USD"})
+    holding_id = client.post(
+        f"/api/portfolios/{created['id']}/buy",
+        json={"symbol": "AAPL", "quantity": 1, "price": 100.0},
+    ).get_json()["holding"]["id"]
+    client.put(
+        f"/api/portfolios/{created['id']}/holdings/{holding_id}/price-override",
+        json={"price": 150.0},
+    )
+
+    # What-if at 300 must win over the 150 override (portfolio-wide scenario).
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if",
+        json={"prices": {"AAPL": 300.0}, "name": "OverrideWins"},
+    )
+    assert resp.status_code == 200
+    scenario_holding = next(h for h in resp.get_json()["holdings"] if h["symbol"] == "AAPL")
+    assert scenario_holding["current_price"] == 300.0
+
+
 def test_buy_without_funding_rejected(client):
     """The core 'free money' bug: a user with no wallet funds has a zero balance,
     so the order is rejected instead of succeeding unchecked."""

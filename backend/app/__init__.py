@@ -5,6 +5,8 @@ from flask import Flask
 from app.api.errors import register_error_handlers
 from app.api.portfolios import bp as portfolios_bp
 from app.api.wallet import bp as wallet_bp
+from app.api.alerts import bp as alerts_bp
+from app.api.alerts import check_active_alerts
 from app.config import Config
 from app.extensions import db
 from app.models import Security
@@ -33,6 +35,10 @@ def _start_realtime_price_updater(app):
                             service.get_current_price(symbol)
                         except UnknownTickerError:
                             continue
+                    # After refreshing portfolio symbols, evaluate any active
+                    # price targets so crossed thresholds flip without waiting
+                    # for an explicit /api/alerts/check call.
+                    check_active_alerts()
             except Exception:
                 app.logger.exception("Realtime price update failed")
             stop_event.wait(app.config.get("MARKET_PRICE_REFRESH_INTERVAL_SECONDS", 60))
@@ -51,6 +57,7 @@ def create_app(config_class=Config):
     register_error_handlers(app)
     app.register_blueprint(portfolios_bp)
     app.register_blueprint(wallet_bp)
+    app.register_blueprint(alerts_bp)
     _start_realtime_price_updater(app)
 
     @app.get("/health")

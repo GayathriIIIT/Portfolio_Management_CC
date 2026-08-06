@@ -64,6 +64,7 @@ CREATE TABLE security_holding (
     quantity      NUMERIC(18,4) NOT NULL,                       -- shares / face-value units / cash units
     avg_cost      NUMERIC(18,4) NOT NULL,                       -- weighted avg cost basis per unit
     first_purchased_at TIMESTAMP NULL,                         -- timestamp of first purchase/buy
+    price_override    NUMERIC(18,4) NULL,                       -- manual price override; NULL = use live quote
     CONSTRAINT fk_hold_portfolio
         FOREIGN KEY (portfolio_id) REFERENCES portfolio(id) ON DELETE CASCADE,
     CONSTRAINT fk_hold_security
@@ -152,3 +153,24 @@ CREATE TABLE wallet (
     currency   CHAR(3)         PRIMARY KEY,   -- e.g. 'USD'
     balance    NUMERIC(20,4)   NOT NULL DEFAULT 0
 );
+
+
+-- =========================================================================
+-- 8. PRICE_ALERT
+--    User-defined price targets. Fires when the live quote crosses target.
+--    `condition` is 'ABOVE' (price >= target) or 'BELOW' (price <= target).
+--    Fired alerts are deactivated so they don't re-fire every poll.
+-- =========================================================================
+CREATE TABLE price_alert (
+    id            BIGINT        PRIMARY KEY AUTO_INCREMENT,
+    symbol        VARCHAR(32)   NOT NULL,                       -- security.symbol (resolved on read)
+    target_price  NUMERIC(18,4) NOT NULL,
+    `condition`   VARCHAR(8)    NOT NULL DEFAULT 'ABOVE',       -- ABOVE | BELOW
+    last_price    NUMERIC(18,4) NULL,                           -- last observed price at check time
+    is_active     TINYINT(1)    NOT NULL DEFAULT 1,
+    fired         TINYINT(1)    NOT NULL DEFAULT 0,
+    fired_at      TIMESTAMP     NULL,
+    created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_price_alert_condition CHECK (`condition` IN ('ABOVE','BELOW'))
+);
+CREATE INDEX ix_price_alert_symbol ON price_alert(symbol);
