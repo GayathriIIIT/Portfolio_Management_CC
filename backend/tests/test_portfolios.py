@@ -748,3 +748,97 @@ def test_buy_and_sell_adjusts_wallet_balance(client):
     usd = next(w for w in wallet if w["currency"] == "USD")
     assert usd["balance"] == 850.0
 
+
+def test_what_if_price_history_chart(client, monkeypatch):
+    """The what-if chart endpoint returns daily price series from the target
+    date to today for each scenario symbol, with the hypothetical and live prices."""
+    created = _create_portfolio(client).get_json()
+    client.post("/api/wallet/deposit", json={"amount": 1000.0, "currency": "USD"})
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    # Mock collect_daily_closes to return deterministic daily closes from the
+    # target date through today.
+    from datetime import date
+    fake_closes = {
+        date(2024, 1, 10): 150.0,
+        date(2024, 1, 11): 152.0,
+        date(2024, 1, 12): 151.0,
+    }
+    monkeypatch.setattr(mps_module, "collect_daily_closes", lambda *a, **kw: dict(fake_closes))
+    # Mock get_historical_price for the hypothetical price at the target date
+    monkeypatch.setattr(mps_module, "get_historical_price", lambda symbol, trade_date, price_type="close": 150.0)
+
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if/chart",
+        json={"date": "2024-01-10", "symbols": ["AAPL"]},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["target_date"] == "2024-01-10"
+    assert body["price_type"] == "close"
+    assert len(body["series"]) == 1
+    series = body["series"][0]
+    assert series["symbol"] == "AAPL"
+    assert series["hypothetical_price"] == 150.0
+    assert len(series["points"]) == 3
+    assert series["points"][0] == {"date": "2024-01-10", "price": 150.0}
+    assert series["points"][-1] == {"date": "2024-01-12", "price": 151.0}
+
+
+def test_what_if_price_history_missing_date_rejected(client):
+    created = _create_portfolio(client).get_json()
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if/chart",
+        json={"symbols": ["AAPL"]},
+    )
+    assert resp.status_code == 400
+    assert "date" in resp.get_json()["error"].lower()
+
+
+def test_what_if_price_history_no_symbols_uses_portfolio_holdings(client, monkeypatch):
+    """When no symbols are provided, the chart falls back to the portfolio's own
+    holdings (excluding cash)."""
+    created = _create_portfolio(client).get_json()
+    client.post("/api/wallet/deposit", json={"amount": 1000.0, "currency": "USD"})
+    client.post(
+        f"/api/portfolios/{created['id']}/holdings",
+        json={"symbol": "AAPL", "quantity": 10, "purchase_price": 100.0},
+    )
+
+    from datetime import date
+    fake_closes = {date(2024, 1, 10): 150.0}
+    monkeypatch.setattr(mps_module, "collect_daily_closes", lambda *a, **kw: dict(fake_closes))
+    monkeypatch.setattr(mps_module, "get_historical_price", lambda symbol, trade_date, price_type="close": 150.0)
+
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if/chart",
+        json={"date": "2024-01-10"},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    symbols_in_series = [s["symbol"] for s in body["series"]]
+    assert "AAPL" in symbols_in_series
+
+
+def test_what_if_price_history_excludes_cash(client, monkeypatch):
+    """Cash symbols (e.g. USD-CASH) are excluded from the price history chart."""
+    created = _create_portfolio(client).get_json()
+
+    from datetime import date
+    fake_closes = {date(2024, 1, 10): 150.0}
+    monkeypatch.setattr(mps_module, "collect_daily_closes", lambda *a, **kw: dict(fake_closes))
+    monkeypatch.setattr(mps_module, "get_historical_price", lambda symbol, trade_date, price_type="close": 150.0)
+
+    resp = client.post(
+        f"/api/portfolios/{created['id']}/what-if/chart",
+        json={"date": "2024-01-10", "symbols": ["USD-CASH", "AAPL"]},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    symbols_in_series = [s["symbol"] for s in body["series"]]
+    assert "USD-CASH" not in symbols_in_series
+    assert "AAPL" in symbols_in_series
+

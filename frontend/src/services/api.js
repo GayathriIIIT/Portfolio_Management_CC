@@ -77,6 +77,9 @@ export const api = {
   getWhatIfList: (portfolioId) => request(`${API_BASE}/${portfolioId}/what-if`),
   deleteWhatIfEntry: (portfolioId, whatifId) => request(`${API_BASE}/${portfolioId}/what-if/${whatifId}`, { method: 'DELETE' }),
 
+  // What-If price history chart (from scenario target date to today)
+  getWhatIfPriceHistory: (portfolioId, payload) => request(`${API_BASE}/${portfolioId}/what-if/chart`, { method: 'POST', body: payload }),
+
   // Real-time market quote lookup
   getRealtimeQuote: (symbol) => request(`${API_BASE}/market_price/realtime?symbol=${encodeURIComponent(symbol)}`),
 

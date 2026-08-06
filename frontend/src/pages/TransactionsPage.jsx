@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Receipt, Filter, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
+import { Receipt, Filter, ArrowUpRight, ArrowDownRight, RefreshCw, Calendar, X } from 'lucide-react';
 import { api } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
 
@@ -8,6 +8,8 @@ export function TransactionsPage({ portfolio }) {
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('ALL');
   const [filterHoldingType, setFilterHoldingType] = useState('ALL');
+  const [filterFromDate, setFilterFromDate] = useState('');
+  const [filterToDate, setFilterToDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
@@ -48,6 +50,18 @@ export function TransactionsPage({ portfolio }) {
   const filtered = transactions.filter((t) => {
     if (filterType !== 'ALL' && t.type !== filterType) return false;
     if (filterHoldingType !== 'ALL' && t.security_type !== filterHoldingType) return false;
+    if (filterFromDate) {
+      const txDate = new Date(t.executed_at);
+      const fromDate = new Date(filterFromDate);
+      fromDate.setHours(0, 0, 0, 0);
+      if (txDate < fromDate) return false;
+    }
+    if (filterToDate) {
+      const txDate = new Date(t.executed_at);
+      const toDate = new Date(filterToDate);
+      toDate.setHours(23, 59, 59, 999);
+      if (txDate > toDate) return false;
+    }
     return true;
   });
 
@@ -107,6 +121,43 @@ export function TransactionsPage({ portfolio }) {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Calendar size={16} style={{ color: 'var(--text-secondary)' }} />
+            <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              Date Range:
+            </span>
+            <input
+              type="date"
+              className="form-input"
+              style={{ height: '30px', fontSize: '0.8rem', padding: '2px 6px', width: '130px' }}
+              value={filterFromDate}
+              onChange={(e) => setFilterFromDate(e.target.value)}
+              max={filterToDate || new Date().toISOString().split('T')[0]}
+              placeholder="From"
+            />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>to</span>
+            <input
+              type="date"
+              className="form-input"
+              style={{ height: '30px', fontSize: '0.8rem', padding: '2px 6px', width: '130px' }}
+              value={filterToDate}
+              onChange={(e) => setFilterToDate(e.target.value)}
+              min={filterFromDate}
+              max={new Date().toISOString().split('T')[0]}
+              placeholder="To"
+            />
+            {(filterFromDate || filterToDate) && (
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ padding: '2px 8px', height: '30px' }}
+                onClick={() => { setFilterFromDate(''); setFilterToDate(''); }}
+                title="Clear date filters"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
 
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
