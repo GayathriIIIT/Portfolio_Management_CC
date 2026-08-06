@@ -115,6 +115,80 @@ def test_fundamentals_cheap_valuation_and_dividend_boost_score():
     assert any("dividend" in r.lower() for r in rec["reasons"])
 
 
+def test_sortino_and_calmar_boost_score():
+    risk = {
+        "period_days": 400,
+        "sufficient_history": True,
+        "sharpe_ratio": 1.6,
+        "sortino_ratio": 2.4,
+        "max_drawdown": 15.0,
+        "annualized_return": 20.0,
+        "beta": 1.0,
+        "up_capture": 100.0,
+        "down_capture": 100.0,
+    }
+    rec = generate_recommendation(risk, alpha=1.0, xirr=18.0, profit_loss_percentage=15.0)
+    # Sharpe (+2), Sortino (+1), Calmar 20/15 = 1.33 (+1) push past the ADD bar.
+    assert rec["action"] == "ADD"
+    assert any("Sortino" in r for r in rec["reasons"])
+    assert any("Calmar" in r for r in rec["reasons"])
+
+
+def test_bad_sortino_and_calmar_penalize_score():
+    risk = {
+        "period_days": 500,
+        "sufficient_history": True,
+        "sharpe_ratio": 0.4,
+        "sortino_ratio": -0.5,
+        "max_drawdown": 45.0,
+        "annualized_return": 3.0,
+        "beta": 1.0,
+        "up_capture": 100.0,
+        "down_capture": 100.0,
+    }
+    rec = generate_recommendation(risk, alpha=0.0, xirr=3.0, profit_loss_percentage=2.0)
+    # Sortino (-1) and Calmar 3/45 = 0.07 (-1) help push toward a reduce signal.
+    assert rec["action"] == "SELL"
+    assert any("Sortino" in r for r in rec["reasons"])
+    assert any("Calmar" in r for r in rec["reasons"])
+
+
+def test_correlation_and_volatility_signals():
+    low_risk = {
+        "period_days": 400,
+        "sufficient_history": True,
+        "sharpe_ratio": 0.6,
+        "max_drawdown": 10.0,
+        "annualized_volatility": 10.0,
+        "correlation": 0.35,
+        "beta": 0.5,
+        "up_capture": 100.0,
+        "down_capture": 100.0,
+        "worst_day": -3.0,
+    }
+    rec = generate_recommendation(low_risk, alpha=0.0, xirr=8.0, profit_loss_percentage=6.0)
+    assert any("correlation" in r.lower() for r in rec["reasons"])
+    assert any("volatility" in r.lower() for r in rec["reasons"])
+
+    high_risk = {
+        "period_days": 400,
+        "sufficient_history": True,
+        "sharpe_ratio": 0.5,
+        "max_drawdown": 18.0,
+        "annualized_volatility": 45.0,
+        "correlation": 0.95,
+        "beta": 1.0,
+        "up_capture": 100.0,
+        "down_capture": 100.0,
+        "worst_day": -9.5,
+    }
+    rec2 = generate_recommendation(high_risk, alpha=0.0, xirr=5.0, profit_loss_percentage=4.0)
+    assert rec2["score"] < rec["score"]
+    assert any("High" in r or "highly correlated" in r.lower() for r in rec2["reasons"])
+    assert any("volatility" in r.lower() for r in rec2["reasons"])
+    assert any("Worst single day" in r for r in rec2["reasons"])
+
+
 def test_risk_endpoint_rejects_invalid_range(client):
     created = client.post("/api/portfolios", json={"owner": "Risk", "name": "T"}).get_json()
     resp = client.get(f"/api/portfolios/{created['id']}/analytics/risk?range=9m")
