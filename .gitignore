@@ -34,3 +34,4 @@ backend/.env
 Thumbs.db
 .idea/
 .vscode/
+database/migrations/

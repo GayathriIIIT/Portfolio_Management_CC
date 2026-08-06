@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { api } from '../services/api';
-import { TrendingUp, Calendar, Layers } from 'lucide-react';
+import { TrendingUp, Calendar } from 'lucide-react';
 
 const RANGES = [
   { id: '1d', label: '1D' },
@@ -77,6 +77,16 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
   const [symbolsList, setSymbolsList] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState('');
   const [benchmarkData, setBenchmarkData] = useState(null);
+
+  const chartContainerRef = React.useRef(null);
+  const [chartHeight, setChartHeight] = useState(360);
+
+  useEffect(() => {
+    if (chartContainerRef.current) {
+      const rect = chartContainerRef.current.getBoundingClientRect();
+      setChartHeight(Math.max(360, rect.height - 4));
+    }
+  }, []);
 
   const effectiveBenchmark =
     benchmark === 'CUSTOM' ? (customBenchmark.trim().toUpperCase() || 'NONE') : benchmark;
@@ -197,7 +207,7 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
     : [];
 
   return (
-    <div className="card" style={{ marginBottom: '28px' }}>
+    <div className="card" style={{ marginBottom: '28px', display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
       <div
         style={{
           display: 'flex',
