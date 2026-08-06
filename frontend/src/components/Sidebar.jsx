@@ -6,6 +6,7 @@ import {
   FlaskConical,
   FolderCog,
   Compass,
+  FileText,
   Sun,
   Moon,
 } from 'lucide-react';
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { id: 'trade', label: 'Trade (Buy/Sell)', icon: ArrowLeftRight },
   { id: 'transactions', label: 'Transaction Ledger', icon: Receipt },
   { id: 'what-if', label: 'What-If Simulator', icon: FlaskConical },
+  { id: 'report', label: 'Report / PDF', icon: FileText },
   { id: 'portfolios', label: 'Manage Portfolios', icon: FolderCog },
 ];
 
