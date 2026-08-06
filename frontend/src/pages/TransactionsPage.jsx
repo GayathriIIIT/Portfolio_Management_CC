@@ -122,9 +122,11 @@ export function TransactionsPage({ portfolio }) {
               <tbody>
                 {filtered.map((t) => {
                   const isBuy = t.type === 'BUY' || t.type === 'DEPOSIT';
-                  const gross = (t.quantity || 0) * (t.price || 0);
+                  const priceBase = Number(t.price_base ?? t.price) || 0;
+                  const feesBase = Number(t.fees_base ?? t.fees) || 0;
+                  const gross = (t.quantity || 0) * priceBase;
                   // SELL/WITHDRAW: the fee reduces the amount received.
-                  const total = isBuy ? gross + (t.fees || 0) : gross - (t.fees || 0);
+                  const total = isBuy ? gross + feesBase : gross - feesBase;
 
                   return (
                     <tr key={t.id}>
@@ -141,9 +143,9 @@ export function TransactionsPage({ portfolio }) {
                       <td style={{ textAlign: 'right', fontWeight: '600' }}>
                         {Number(t.quantity).toLocaleString()}
                       </td>
-                      <td style={{ textAlign: 'right' }}>${t.price.toFixed(2)}</td>
+                      <td style={{ textAlign: 'right' }}>${priceBase.toFixed(2)}</td>
                       <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
-                        ${t.fees ? t.fees.toFixed(2) : '0.00'}
+                        ${feesBase.toFixed(2)}
                       </td>
                       <td style={{ textAlign: 'right', fontWeight: '700' }}>
                         ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}

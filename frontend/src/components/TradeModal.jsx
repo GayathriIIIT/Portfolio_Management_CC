@@ -36,6 +36,10 @@ export function TradeModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  // FX for converting the symbol's native quote into the base-currency wallet.
+  // 1.0 when the symbol trades in the base currency or the rate is unavailable.
+  const [fxRate, setFxRate] = useState(1);
+  const [quoteCurrency, setQuoteCurrency] = useState(currency);
 
   const { isBrainrot } = useTheme();
   const { showToast } = useBrainrotToast();
@@ -49,6 +53,8 @@ export function TradeModal({
       setError(null);
       setSuccessMsg(null);
       setQuoteInfo(null);
+      setFxRate(1);
+      setQuoteCurrency(currency);
       if (initialSymbol) {
         fetchQuote(initialSymbol);
       } else {
@@ -67,6 +73,19 @@ export function TradeModal({
       rememberTicker(ticker.trim().toUpperCase(), res.name || '');
       if (res.price) {
         setPrice(res.price);
+      }
+      const base = (currency || 'USD').toUpperCase();
+      const qc = (res.currency || base).toUpperCase();
+      setQuoteCurrency(qc);
+      if (qc === base) {
+        setFxRate(1);
+      } else {
+        try {
+          const fx = await api.getFxRate(qc, base);
+          setFxRate(fx && fx.rate ? Number(fx.rate) : 1);
+        } catch (_) {
+          setFxRate(1);
+        }
       }
     } catch (err) {
       // Failed to get quote, fallback to manual price entry
@@ -116,7 +135,9 @@ export function TradeModal({
         if (isNaN(priceVal) || priceVal <= 0) {
           throw new Error('Execution price must be a positive number');
         }
-        const buyTotal = priceVal * qty + feeVal;
+        // Native order total converted into the base-currency wallet, matching
+        // the backend's settlement math.
+        const buyTotal = (priceVal * qty + feeVal) * fxRate;
         if (buyTotal > walletBalance) {
           throw new Error(
             `Insufficient wallet balance. Order total: ${formatMoney(buyTotal)}, Available: ${formatMoney(walletBalance)}`
@@ -162,10 +183,14 @@ export function TradeModal({
     }
   };
 
-  const tradeTotal = (Number(price) || 0) * (Number(quantity) || 0);
+  const tradeTotalNative = (Number(price) || 0) * (Number(quantity) || 0);
   const feeValue = Number(fees || 0);
-  // SELL fees reduce the proceeds received; BUY fees add to the cost.
-  const totalCost = txnType === 'SELL' ? tradeTotal - feeValue : tradeTotal + feeValue;
+  // SELL fees reduce the proceeds received; BUY fees add to the cost. The price
+  // is the security's native quote, so the total is FX-converted into the
+  // base-currency wallet (same math as the backend's buy/sell settlement).
+  const totalInNative = txnType === 'SELL' ? tradeTotalNative - feeValue : tradeTotalNative + feeValue;
+  const totalCost = totalInNative * fxRate;
+  const isForeignQuote = quoteCurrency.toUpperCase() !== (currency || 'USD').toUpperCase() && fxRate !== 1;
   const insufficientWallet =
     txnType === 'BUY' && price && totalCost > walletBalance;
 
@@ -274,7 +299,7 @@ export function TradeModal({
             </div>
 
             <div className="form-group">
-              <label className="form-label">Execution Price ({currency})</label>
+              <label className="form-label">Execution Price ({quoteCurrency || currency})</label>
               <input
                 type="number"
                 step="0.01"
@@ -284,6 +309,11 @@ export function TradeModal({
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
               />
+              {isForeignQuote && Number(price) > 0 && (
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '4px', fontWeight: '500' }}>
+                  ≈ {formatMoney(Number(price) * fxRate)} / share in {currency}
+                </div>
+              )}
             </div>
           </div>
 
@@ -321,6 +351,12 @@ export function TradeModal({
                 {formatMoney(walletBalance + (txnType === 'SELL' ? totalCost : 0))}
               </span>
             </div>
+                        {isForeignQuote && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                <span>FX rate ({quoteCurrency} → {currency}):</span>
+                <span style={{ fontWeight: '600' }}>1 {quoteCurrency} = {fxRate.toFixed(4)} {currency}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '8px' }}>
               <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Total Estimated {txnType}:</span>
               <span style={{ fontWeight: '700', fontSize: '1.1rem', color: insufficientWallet ? 'var(--danger-text)' : 'var(--text-primary)' }}>

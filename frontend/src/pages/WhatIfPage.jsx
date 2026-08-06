@@ -483,17 +483,19 @@ export function WhatIfPage({ portfolio }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>Simulated Cost Basis</div>
+                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>{isSandboxResult ? 'Cost to Build Basket (live)' : 'Simulated Cost Basis'}</div>
                   <div style={{ fontWeight: '800', fontSize: '1.1rem' }}>
                     ${simulationResult.invested_value.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </div>
                 </div>
 
                 <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>Simulated P&L</div>
-                  <div className={`font-bold text-lg ${simulationResult.profit_loss >= 0 ? 'text-positive' : 'text-negative'}`} style={{ fontWeight: '800', fontSize: '1.1rem' }}>
-                    {simulationResult.profit_loss >= 0 ? '+' : ''}
-                    ${simulationResult.profit_loss.toLocaleString(undefined, { minimumFractionDigits: 2 })} ({simulationResult.profit_loss_percentage.toFixed(2)}%)
+                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>
+                    {isSandboxResult ? 'Simulated P&L (vs live cost)' : 'P&L if bought at simulated price (vs today)'}
+                  </div>
+                  <div className={`font-bold text-lg ${(isSandboxResult ? simulationResult.profit_loss : (simulationResult.reverse_profit_loss ?? simulationResult.profit_loss)) >= 0 ? 'text-positive' : 'text-negative'}`} style={{ fontWeight: '800', fontSize: '1.1rem' }}>
+                    {(isSandboxResult ? simulationResult.profit_loss : (simulationResult.reverse_profit_loss ?? simulationResult.profit_loss)) >= 0 ? '+' : ''}
+                    ${(isSandboxResult ? simulationResult.profit_loss : (simulationResult.reverse_profit_loss ?? simulationResult.profit_loss)).toLocaleString(undefined, { minimumFractionDigits: 2 })} ({(isSandboxResult ? simulationResult.profit_loss_percentage : (simulationResult.reverse_profit_loss_pct ?? simulationResult.profit_loss_percentage)).toFixed(2)}%)
                   </div>
                 </div>
               </div>
@@ -506,8 +508,9 @@ export function WhatIfPage({ portfolio }) {
                   <thead>
                     <tr>
                       <th>Symbol</th>
-                      <th style={{ textAlign: 'right' }}>Hyp. / Cost Price</th>
-                      <th style={{ textAlign: 'right' }}>{isSandboxResult ? 'Current Price' : 'Simulated Price'}</th>
+                      <th style={{ textAlign: 'right' }}>{isSandboxResult ? 'Hyp. Price' : 'Cost / Share'}</th>
+                      {!isSandboxResult && <th style={{ textAlign: 'right' }}>Simulated Price</th>}
+                      <th style={{ textAlign: 'right' }}>Current Price (live)</th>
                       <th style={{ textAlign: 'right' }}>Market Value</th>
                       <th style={{ textAlign: 'right' }}>P&L</th>
                       <th style={{ textAlign: 'right' }}>P&L %</th>
@@ -515,17 +518,27 @@ export function WhatIfPage({ portfolio }) {
                   </thead>
                   <tbody>
                     {simulationResult.holdings.map((h, i) => {
-                      // Sandbox mode uses profit_loss / profit_loss_percentage
-                      // Portfolio mode uses unrealized_pl / unrealized_pl_pct
-                      const pl = h.profit_loss ?? h.unrealized_pl ?? 0;
-                      const plPct = h.profit_loss_percentage ?? h.unrealized_pl_pct ?? 0;
                       const costPrice = h.hypothetical_price ?? h.purchase_price ?? 0;
-                      const livePrice = h.current_price ?? 0;
+                      const simPrice = h.current_price ?? 0;
+                      const livePrice = isSandboxResult
+                        ? (h.current_price ?? 0)
+                        : (h.live_price ?? h.current_price ?? 0);
+                      const qty = h.quantity ?? 1;
+                      // Sandbox mode: P&L = (target − live) × qty (backend computed).
+                      // Portfolio mode: P&L = (live − simulated) × qty (user-chosen
+                      // reverse math: bought at the simulated price, held to today).
+                      const pl = isSandboxResult
+                        ? (h.profit_loss ?? 0)
+                        : (livePrice - simPrice) * qty;
+                      const plPct = isSandboxResult
+                        ? (h.profit_loss_percentage ?? 0)
+                        : (simPrice !== 0 ? ((livePrice - simPrice) / simPrice) * 100 : 0);
                       const plClass = pl >= 0 ? 'text-positive' : 'text-negative';
                       return (
                         <tr key={i}>
                           <td style={{ fontWeight: '800' }}>{h.symbol}</td>
                           <td style={{ textAlign: 'right' }}>${costPrice.toFixed(2)}</td>
+                          {!isSandboxResult && <td style={{ textAlign: 'right' }}>${simPrice.toFixed(2)}</td>}
                           <td style={{ textAlign: 'right' }}>${livePrice.toFixed(2)}</td>
                           <td style={{ textAlign: 'right', fontWeight: '700' }}>
                             ${(h.market_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -541,6 +554,11 @@ export function WhatIfPage({ portfolio }) {
                     })}
                   </tbody>
                 </table>
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
+                {isSandboxResult
+                  ? 'P&L = (Hyp. price − current price) × quantity. A target price above today\u2019s price shows a profit; below it shows a loss.'
+                  : 'P&L = (current live price − simulated price) × quantity. A simulated price below today\u2019s live price shows a profit (bought at the simulated price, held to today); above it shows a loss.'}
               </div>
               {isBrainrot && (
                 <div className={`brainrot-side-gif whatif ${simulationResult.profit_loss >= 0 ? 'profit' : 'loss'}`} style={{ marginTop: '16px' }}>

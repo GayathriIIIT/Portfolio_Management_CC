@@ -71,7 +71,15 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
         # $5k of cash into $1.25M).
         raw_current_price = raw_purchase_price
     elif override_prices is not None and symbol in override_prices:
+        # What-if hypothetical price wins over both the live quote and a manual
+        # bond price override: the point of a scenario is to see that price.
         raw_current_price = float(override_prices[symbol])
+    elif holding.price_override is not None:
+        # Manual price override (chiefly bonds whose live Yahoo quote is stale):
+        # value the holding at the user-entered native price instead of a live
+        # quote, so P/L and NAV reflect what the user knows the instrument is
+        # actually worth.
+        raw_current_price = float(holding.price_override)
     else:
         try:
             raw_current_price = float(_price_service().get_current_price(symbol))
@@ -80,8 +88,24 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
 
     fx_rate = _price_service().get_fx_rate(sec_currency, base_currency)
 
+    # Today's (pre-scenario) live price, in the symbol's native currency. When a
+    # price override or what-if price is in effect, `raw_current_price` above is
+    # the simulated price, so we resolve the *real* live quote separately. The
+    # what-if UI uses it to show "P&L if bought at the simulated price and held
+    # to today" (live − simulated) x qty.
+    if security_type in ("CASH"):
+        raw_live_price = raw_purchase_price
+    elif override_prices is None and holding.price_override is None:
+        raw_live_price = raw_current_price
+    else:
+        try:
+            raw_live_price = float(_price_service().get_current_price(symbol))
+        except UnknownTickerError:
+            raw_live_price = raw_purchase_price
+
     current_price = raw_current_price * fx_rate
     purchase_price = raw_purchase_price * fx_rate
+    live_price = raw_live_price * fx_rate
 
     market_value = current_price * quantity
     cost_basis = purchase_price * quantity
@@ -136,8 +160,11 @@ def _serialize_holding(holding, override_prices=None, base_currency="USD"):
         "quantity": quantity,
         "native_purchase_price": raw_purchase_price,
         "native_current_price": raw_current_price,
+        "native_live_price": raw_live_price,
+        "price_override": float(holding.price_override) if holding.price_override is not None else None,
         "purchase_price": purchase_price,
         "current_price": current_price,
+        "live_price": live_price,
         "market_value": market_value,
         "cost_basis": cost_basis,
         "unrealized_pl": unrealized_pl,
@@ -436,6 +463,104 @@ def realtime_market_price():
     return jsonify({"symbol": symbol, **quote})
 
 
+# Rule-based "similar stocks" universe: hand-picked liquid tickers per sector.
+# This is deliberately a lightweight substitute for a machine-learned embedding —
+# it gives 90% of the demo value (same-sector, comparable-size names) without the
+# tensorflow/transformers dependency the reference app drags in.
+_SECTOR_CANDIDATES = {
+    "technology": ["MSFT", "AAPL", "NVDA", "GOOGL", "AMZN", "AMD", "META", "AVGO", "CRM", "ORCL", "ADBE", "INTC", "TSM"],
+    "communication": ["META", "GOOGL", "NFLX", "DIS", "TMUS", "VZ", "CMCSA", "SPOT", "EA"],
+    "consumer": ["TSLA", "HD", "MCD", "NKE", "LOW", "TJX", "SBUX", "TGT", "MAR"],
+    "consumer staples": ["PG", "KO", "WMT", "COST", "PEP", "CL", "UL", "KMB", "SYY"],
+    "energy": ["XOM", "CVX", "COP", "SLB", "EOG", "PSX", "VLO", "OXY"],
+    "industrials": ["CAT", "DE", "BA", "GE", "HON", "UNP", "LMT", "RTX", "ETN"],
+    "financial": ["JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "AXP", "BLK"],
+    "healthcare": ["UNH", "JNJ", "MRK", "ABBV", "LLY", "TMO", "PFE", "AMGN"],
+    "utility": ["NEE", "DUK", "SO", "AEP", "EXC", "SRE", "XEL"],
+    "real estate": ["PLD", "AMT", "CCI", "EQIX", "WELL", "SPG"],
+    "materials": ["LIN", "SHW", "APD", "FCX", "NEM", "ECL", "DOW"],
+}
+_GENERIC_UNIVERSE = ["MSFT", "AAPL", "GOOGL", "AMZN", "NVDA", "JPM", "JNJ", "V"]
+
+
+def _similar_universe(sector):
+    label = (sector or "").lower()
+    for key, tickers in _SECTOR_CANDIDATES.items():
+        if key in label:
+            return list(dict.fromkeys(tickers))
+    return list(_GENERIC_UNIVERSE)
+
+
+def _positive_num(value):
+    try:
+        v = float(value)
+        return v if v and v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+@bp.get("/market_price/similar")
+def similar_stocks():
+    """Recommend comparable stocks to a given symbol.
+
+    Rule-based: pull the target's sector and market cap, then rank a curated
+    same-sector universe by how close each candidate's market cap is (log
+    distance) and return the closest few with their quotes and P/E ratios.
+    """
+    symbol = request.args.get("symbol")
+    if symbol is None or not isinstance(symbol, str) or not symbol.strip():
+        raise ApiError("'symbol' query parameter is required", status_code=400)
+    symbol = symbol.upper().strip()
+
+    service = _price_service()
+    try:
+        info = service.get_quote(symbol)
+    except UnknownTickerError as exc:
+        raise ApiError(str(exc), status_code=400) from exc
+
+    sector = info.get("sector")
+    target_fund = service.get_fundamentals(symbol) or {}
+    target_cap = _positive_num(target_fund.get("market_cap"))
+
+    import math
+
+    result = []
+    for cand in _similar_universe(sector):
+        if cand == symbol:
+            continue
+        try:
+            q = service.get_quote(cand)
+            f = service.get_fundamentals(cand) or {}
+        except Exception:
+            continue
+        cap = _positive_num(f.get("market_cap"))
+        pe = _positive_num(f.get("trailing_pe"))
+        # Market-cap proximity (log distance); names without a market cap get a
+        # neutral mid-range score so they never swamp closer-cap peers.
+        if target_cap and cap:
+            score = abs(math.log(target_cap) - math.log(cap))
+        else:
+            score = 4.0
+        result.append({
+            "symbol": cand,
+            "name": q.get("name"),
+            "currency": q.get("currency") or "USD",
+            "sector": q.get("sector"),
+            "current_price": float(q["price"]) if q.get("price") is not None else None,
+            "market_cap": cap,
+            "pe": pe,
+            "score": round(score, 2),
+        })
+
+    result.sort(key=lambda c: c["score"])
+    return jsonify({
+        "symbol": symbol,
+        "sector": sector,
+        "target_market_cap": target_cap,
+        "similar": result[:6],
+    })
+
+
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
@@ -716,7 +841,9 @@ def _serialize_portfolio(portfolio, include_holdings=True, override_prices=None)
     return data
 
 
-def _serialize_transaction(txn):
+def _serialize_transaction(txn, base_currency="USD"):
+    sec_curr = (txn.security.currency or "USD").upper()
+    fx_rate = _price_service().get_fx_rate(sec_curr, base_currency) or 1.0
     return {
         "id": txn.id,
         "symbol": txn.security.symbol,
@@ -724,19 +851,28 @@ def _serialize_transaction(txn):
         "quantity": float(txn.quantity),
         "price": float(txn.price),
         "fees": float(txn.fees),
+        "currency": sec_curr,
+        "fx_rate": fx_rate,
+        # Native price/fees converted into the portfolio's base currency so the
+        # UI can show what the order actually cost/received in the user's money.
+        "price_base": round(float(txn.price) * fx_rate, 4),
+        "fees_base": round(float(txn.fees) * fx_rate, 4),
         "executed_at": txn.executed_at.isoformat(),
     }
 
 
 @bp.get("/<int:portfolio_id>/transactions")
 def get_portfolio_transactions(portfolio_id):
-    _get_portfolio_or_404(portfolio_id)
+    portfolio = _get_portfolio_or_404(portfolio_id)
     transactions = (
         PortfolioTransaction.query.filter_by(portfolio_id=portfolio_id)
         .order_by(PortfolioTransaction.executed_at.desc())
         .all()
     )
-    return jsonify([_serialize_transaction(txn) for txn in transactions])
+    return jsonify([
+        _serialize_transaction(txn, base_currency=portfolio.base_currency or "USD")
+        for txn in transactions
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -944,7 +1080,9 @@ def _reconstruct_nav_series(portfolio, lookback_days=None, start_date=None, incl
         sec = sec_by_id.get(hid)
         if sec is None or sec.type == "CASH":
             continue
-        closes_by_sym[hid] = market_price_service.collect_daily_closes(sec.symbol, closes_start, today)
+        closes_by_sym[hid] = market_price_service.collect_daily_closes(
+            sec.symbol, closes_start, today, security_id=sec.id, db_session=db.session
+        )
         fx_by_sec[hid] = fx.get_fx_rate(sec.currency or "USD", base_curr)
 
     positions = {}
@@ -1491,6 +1629,59 @@ def refresh_portfolio_prices(portfolio_id):
     })
 
 
+@bp.post("/<int:portfolio_id>/backfill-prices")
+def backfill_portfolio_prices(portfolio_id):
+    """Backfill historical daily closes into the market_price cache for every
+    non-cash holding of the portfolio.
+
+    The window starts at the holding's earliest trade (or first-purchased date,
+    portfolio creation) and is clamped to the trailing five years so a single
+    tap can't trigger a multi-decade pull. Repeatedly backfilling the same
+    window is idempotent. Returns a per-symbol summary.
+    """
+    portfolio = _get_portfolio_or_404(portfolio_id)
+    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    earliest_allowed = today - timedelta(days=5 * 366)
+
+    txn_dates = {}
+    for txn in PortfolioTransaction.query.filter_by(portfolio_id=portfolio.id).all():
+        if txn.security_id is None:
+            continue
+        d = _to_naive_utc(txn.executed_at).date()
+        prev = txn_dates.get(txn.security_id)
+        if prev is None or d < prev:
+            txn_dates[txn.security_id] = d
+
+    results = []
+    for holding in portfolio.holdings:
+        if holding.security.type in {"CASH"}:
+            continue
+        symbol = holding.security.symbol
+        sec_id = holding.security_id
+
+        start = txn_dates.get(sec_id)
+        if start is None and holding.first_purchased_at is not None:
+            start = _to_naive_utc(holding.first_purchased_at).date()
+        if start is None and portfolio.created_at is not None:
+            start = _to_naive_utc(portfolio.created_at).date()
+        if start is None:
+            start = today - timedelta(days=365 * 2)
+        if start < earliest_allowed:
+            start = earliest_allowed
+        if start > today:
+            start = today
+
+        try:
+            summary = market_price_service.backfill_daily_closes(
+                symbol, sec_id, start, today, db_session=db.session
+            )
+            results.append({"symbol": symbol, "start": start.isoformat(), "end": today.isoformat(), **summary})
+        except Exception as exc:
+            results.append({"symbol": symbol, "error": str(exc)})
+
+    return jsonify({"message": "Historical prices backfilled", "holdings": results})
+
+
 @bp.post("/<int:portfolio_id>/what-if")
 def portfolio_what_if(portfolio_id):
     portfolio = _get_portfolio_or_404(portfolio_id)
@@ -1572,6 +1763,23 @@ def portfolio_what_if(portfolio_id):
             )
         else:
             result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
+            # Portfolio-mode "Current Portfolio Holdings" scenarios revalue the
+            # basket at a simulated price. The user asked for P&L to read as
+            # "bought at the simulated price, held to today": (today's live price
+            # − simulated price) x qty, which is the exact reverse of the
+            # cost-basis math `_compute_portfolio_metrics` reports. `live_price`
+            # is resolved per holding in `_serialize_holding`.
+            live_value = sum(
+                float(h.get("live_price", h.get("current_price", 0.0))) * float(h["quantity"])
+                for h in result["holdings"]
+            )
+            result["live_value"] = round(live_value, 4)
+            result["reverse_profit_loss"] = round(live_value - result["current_value"], 4)
+            sim_value = result["current_value"]
+            result["reverse_profit_loss_pct"] = round(
+                (result["reverse_profit_loss"] / sim_value * 100) if sim_value else 0.0,
+                4,
+            )
 
         for symbol, value in override_prices.items():
             security = _get_or_create_security(symbol)
@@ -1761,7 +1969,7 @@ def buy_holding(portfolio_id):
         return jsonify({
             "message": "Cash deposited successfully",
             "holding": _serialize_holding(holding),
-            "transaction": _serialize_transaction(transaction),
+            "transaction": _serialize_transaction(transaction, base_currency=portfolio.base_currency or "USD"),
         }), 201
 
     price = payload.get("price")
@@ -1864,7 +2072,7 @@ def sell_holding(portfolio_id):
         holding, transaction = _adjust_cash(portfolio, cash_ccy, quantity, "withdraw")
         return jsonify({
             "message": "Cash withdrawn successfully",
-            "transaction": _serialize_transaction(transaction),
+            "transaction": _serialize_transaction(transaction, base_currency=portfolio.base_currency or "USD"),
         }), 201
 
     price = payload.get("price")
@@ -1967,6 +2175,39 @@ def update_holding(portfolio_id, holding_id):
     )
 
 
+@bp.put("/<int:portfolio_id>/holdings/<int:holding_id>/price-override")
+def set_holding_price_override(portfolio_id, holding_id):
+    """Set or clear the manual current-price override for a holding.
+
+    Send ``{"price": 105.5}`` to value the position at that native price (used
+    for bonds with stale live quotes), or ``{"price": null}`` to clear the
+    override and revert to the live quote. The override only affects the
+    holding's valuation; it never writes a ledger row or touches the wallet.
+    """
+    portfolio = _get_portfolio_or_404(portfolio_id)
+    holding = _get_holding_or_404(portfolio_id, holding_id)
+
+    if holding.security.type == "CASH":
+        raise ApiError("Cash positions are always carried at face value and cannot be overridden", status_code=400)
+    if holding.security.type == "STOCK":
+        # Permitted too, but the endpoint exists for instruments with unreliable
+        # live quotes (bonds). No restriction beyond CASH.
+        pass
+
+    payload = request.get_json(silent=True) or {}
+    price_val = payload.get("price")
+    if price_val is None:
+        holding.price_override = None
+    elif isinstance(price_val, bool) or not isinstance(price_val, (int, float)) or price_val <= 0:
+        raise ApiError("'price' must be a positive number, or null to clear the override", status_code=400)
+    else:
+        holding.price_override = float(price_val)
+
+    db.session.add(holding)
+    db.session.commit()
+    return jsonify(_serialize_holding(holding, base_currency=portfolio.base_currency or "USD"))
+
+
 @bp.delete("/<int:portfolio_id>/holdings/<int:holding_id>")
 def delete_holding(portfolio_id, holding_id):
     """Liquidate a holding at the current market price.
@@ -2033,7 +2274,7 @@ def deposit_cash(portfolio_id):
     return jsonify({
         "message": "Cash deposited successfully",
         "holding": _serialize_holding(holding),
-        "transaction": _serialize_transaction(transaction)
+        "transaction": _serialize_transaction(transaction, base_currency=portfolio.base_currency or "USD")
     }), 201
 
 
@@ -2049,7 +2290,7 @@ def withdraw_cash(portfolio_id):
     
     return jsonify({
         "message": "Cash withdrawn successfully",
-        "transaction": _serialize_transaction(transaction)
+        "transaction": _serialize_transaction(transaction, base_currency=portfolio.base_currency or "USD")
     }), 201
 
 
