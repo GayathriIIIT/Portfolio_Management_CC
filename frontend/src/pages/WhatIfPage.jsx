@@ -1,8 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Plus, X, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { useTheme } from '../context/ThemeContext';
+import { rememberTicker } from '../services/tickerCache';
+
+const PRICE_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4', '#84cc16', '#f97316'];
+
+// Build a merged chart data array from the price-history series so each symbol's
+// daily closes can be rendered as a separate line on the same LineChart.
+function _buildChartData(priceHistory) {
+  if (!priceHistory?.series?.length) return [];
+  const dateSet = new Set();
+  const bySymbol = {};
+  for (const s of priceHistory.series) {
+    bySymbol[s.symbol] = {};
+    for (const pt of s.points || []) {
+      dateSet.add(pt.date);
+      bySymbol[s.symbol][pt.date] = pt.price;
+    }
+  }
+  return Array.from(dateSet).sort().map((d) => {
+    const row = { date: d };
+    for (const s of priceHistory.series) {
+      const v = bySymbol[s.symbol][d];
+      if (v != null) row[s.symbol] = v;
+    }
+    return row;
+  });
+}
 
 export function WhatIfPage({ portfolio }) {
   const { isBrainrot } = useTheme();
@@ -49,6 +76,11 @@ export function WhatIfPage({ portfolio }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
+
+  // Price-history chart for the what-if scenario (from target date to today)
+  const [priceHistory, setPriceHistory] = useState(null);
+  const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
+  const [priceHistoryError, setPriceHistoryError] = useState(null);
 
   // Saved-scenario re-run state (Show Results / Recheck popups)
   const [scenarioResult, setScenarioResult] = useState(null);
@@ -104,7 +136,8 @@ export function WhatIfPage({ portfolio }) {
       return;
     }
     setError(null);
-    
+    rememberTicker(sym);
+
     setSandboxBasket((prev) => {
       const existingIdx = prev.findIndex((item) => item.symbol === sym);
       if (existingIdx > -1) {
@@ -201,6 +234,40 @@ export function WhatIfPage({ portfolio }) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPriceHistory = async (result) => {
+    const sim = result || simulationResult;
+    if (!portfolio?.id || !sim) return;
+    setPriceHistoryLoading(true);
+    setPriceHistoryError(null);
+
+    const symbols = (sim.holdings || []).map((h) => h.symbol).filter(Boolean);
+    if (!symbols.length) {
+      setPriceHistory(null);
+      setPriceHistoryLoading(false);
+      return;
+    }
+
+    try {
+      const payload = { symbols };
+      if (priceSource === 'historical') {
+        payload.date = targetDate;
+        payload.price_type = priceType;
+      } else {
+        // Manual mode: show the last ~1 year of real price history
+        const d = new Date();
+        d.setDate(d.getDate() - 365);
+        payload.date = d.toISOString().split('T')[0];
+        payload.price_type = 'close';
+      }
+      const data = await api.getWhatIfPriceHistory(portfolio.id, payload);
+      setPriceHistory(data);
+    } catch (err) {
+      setPriceHistoryError(err.message);
+    } finally {
+      setPriceHistoryLoading(false);
     }
   };
 
@@ -751,6 +818,88 @@ export function WhatIfPage({ portfolio }) {
                   />
                 </div>
               )}
+
+              {/* Load Price Graph button */}
+              <div style={{ marginTop: '16px' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ width: '100%' }}
+                   onClick={() => loadPriceHistory()}
+                  disabled={priceHistoryLoading || !simulationResult.holdings?.length}
+                >
+                  {priceHistoryLoading ? <RefreshCw size={14} className="spin" /> : <TrendingUp size={14} />}
+                  <span>{priceHistoryLoading ? 'Loading Graph...' : 'Load Price Graph'}</span>
+                </button>
+              </div>
+
+              {/* Price History Graph (from target date to today) */}
+              {priceHistory && (
+                <div style={{ marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+                  <div style={{ fontWeight: '700', fontSize: '0.95rem', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <TrendingUp size={16} style={{ color: 'var(--accent-primary)' }} />
+                    <span>Price Path: {priceHistory.target_date} → Today</span>
+                  </div>
+                  {priceHistoryError && (
+                    <div className="badge badge-danger" style={{ padding: '8px', marginBottom: '12px' }}>{priceHistoryError}</div>
+                  )}
+                  {priceHistory.series?.length === 0 ? (
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No price history available for the selected symbols.</div>
+                  ) : (
+                    <div style={{ width: '100%', height: '280px' }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={_buildChartData(priceHistory)}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
+                          <XAxis
+                            dataKey="date"
+                            stroke="var(--text-secondary)"
+                            fontSize={11}
+                            tickLine={false}
+                            axisLine={false}
+                            tickFormatter={(d) => d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''}
+                          />
+                          <YAxis
+                            stroke="var(--text-secondary)"
+                            fontSize={11}
+                            tickLine={false}
+                            axisLine={false}
+                            tickFormatter={(v) => `$${v.toFixed(0)}`}
+                          />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px' }}
+                            labelFormatter={(d) => d ? new Date(d).toLocaleDateString([], { dateStyle: 'medium' }) : ''}
+                          />
+                          {priceHistory.series.map((s, i) => (
+                            <Line
+                              key={s.symbol}
+                              type="monotone"
+                              dataKey={s.symbol}
+                              stroke={PRICE_COLORS[i % PRICE_COLORS.length]}
+                              strokeWidth={2}
+                              dot={false}
+                              isAnimationActive={false}
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '8px', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+                          {priceHistory.series.map((s, i) => (
+                            <span key={s.symbol} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: PRICE_COLORS[i % PRICE_COLORS.length] }}></span>
+                              <span>{s.symbol}</span>
+                              {s.hypothetical_price != null && (
+                                <span style={{ color: 'var(--text-secondary)' }}>hyp: ${Number(s.hypothetical_price).toFixed(2)}</span>
+                              )}
+                              {s.live_price != null && (
+                                <span style={{ color: 'var(--text-secondary)' }}>today: ${Number(s.live_price).toFixed(2)}</span>
+                              )}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -857,8 +1006,8 @@ export function WhatIfPage({ portfolio }) {
             )}
           </div>
         </div>
-      </div>
-    )}
+        </div>
+       )}
     </>
   );
 }

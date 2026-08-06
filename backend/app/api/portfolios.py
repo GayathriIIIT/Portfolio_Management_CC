@@ -1860,6 +1860,82 @@ def delete_portfolio_what_if_entry(portfolio_id, whatif_id):
     return "", 204
 
 
+@bp.post("/<int:portfolio_id>/what-if/chart")
+def what_if_price_history(portfolio_id):
+    """Return daily close prices for scenario symbols from a target date to today.
+
+    Used by the What-If page to draw a price-path graph: the historical prices
+    from the scenario's target date up to the current date, with the scenario's
+    hypothetical price marked so the user can see how the security moved from
+    the simulated point to today.
+    """
+    portfolio = _get_portfolio_or_404(portfolio_id)
+    payload = request.get_json(silent=True) or {}
+
+    trade_date = _coerce_date(payload.get("date"))
+    if trade_date is None:
+        raise ApiError("'date' is required (the scenario's target trading date)", status_code=400)
+
+    price_type = _normalize_price_type(payload.get("price_type"))
+    symbols = _parse_symbol_list(payload)
+    if not symbols:
+        symbols = [
+            h.security.symbol for h in portfolio.holdings if h.security.type != "CASH"
+        ]
+
+    if not symbols:
+        raise ApiError("No symbols to chart — provide 'symbol'/'symbols' or add portfolio holdings", status_code=400)
+
+    base_curr = portfolio.base_currency or "USD"
+    today = date.today()
+    fx = _price_service()
+
+    series = []
+    for symbol in symbols:
+        if _parse_cash_symbol(symbol) is not None or symbol in CASH_SUGGESTION_SYMBOLS:
+            continue
+
+        sec = Security.query.filter_by(symbol=symbol).first()
+        sec_id = sec.id if sec is not None else None
+
+        try:
+            closes = market_price_service.collect_daily_closes(
+                symbol, trade_date, today, security_id=sec_id, db_session=db.session
+            )
+        except Exception:
+            closes = {}
+
+        points = [
+            {"date": d.isoformat(), "price": round(p, 4)}
+            for d, p in sorted(closes.items())
+        ]
+
+        hyp_price = None
+        if trade_date in closes:
+            hyp_price = closes[trade_date]
+
+        live_price = None
+        try:
+            live_price = float(fx.get_current_price(symbol))
+        except UnknownTickerError:
+            pass
+
+        series.append({
+            "symbol": symbol,
+            "hypothetical_price": round(hyp_price, 4) if hyp_price else None,
+            "live_price": round(live_price, 4) if live_price else None,
+            "points": points,
+        })
+
+    return jsonify({
+        "portfolio_id": portfolio.id,
+        "target_date": trade_date.isoformat(),
+        "price_type": price_type,
+        "base_currency": base_curr,
+        "series": series,
+    })
+
+
 @bp.put("/<int:portfolio_id>")
 def update_portfolio(portfolio_id):
     portfolio = _get_portfolio_or_404(portfolio_id)

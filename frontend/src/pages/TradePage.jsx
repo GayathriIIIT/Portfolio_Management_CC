@@ -36,6 +36,15 @@ export function TradePage({ portfolio, walletBalance = 0, currency = 'USD', onTr
     setSuccessMsg(null);
     setError(null);
     if (portfolio?.id) {
+      // Pre-populate the ticker autocomplete cache with the portfolio's own
+      // holdings so they appear as suggestions when the trader opens the screen.
+      if (Array.isArray(portfolio.holdings)) {
+        for (const h of portfolio.holdings) {
+          if (h && h.symbol && !String(h.symbol).toUpperCase().endsWith('-CASH')) {
+            rememberTicker(h.symbol.toUpperCase(), h.name || '');
+          }
+        }
+      }
       loadRecentTransactions();
     }
   }, [portfolio?.id]);

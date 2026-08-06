@@ -46,6 +46,15 @@ export function TradeModal({
 
   useEffect(() => {
     if (isOpen) {
+      // Pre-populate the ticker autocomplete cache with the portfolio's own
+      // holdings so they show up as suggestions in the trade modal.
+      if (holdings && holdings.length) {
+        for (const h of holdings) {
+          if (h && h.symbol && !String(h.symbol).toUpperCase().endsWith('-CASH')) {
+            rememberTicker(h.symbol.toUpperCase(), h.name || '');
+          }
+        }
+      }
       setTxnType(initialType);
       setSymbol(initialSymbol);
       setQuantity(1);

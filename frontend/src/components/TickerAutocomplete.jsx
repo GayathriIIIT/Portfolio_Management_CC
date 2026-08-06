@@ -86,19 +86,20 @@ export function TickerAutocomplete({ value, onChange, placeholder, style, classN
           maxHeight: '180px',
           overflowY: 'auto'
         }}>
-          {filtered.map((item) => (
-            <div
-              key={item.symbol}
-              onClick={() => {
-                // Remember the symbol the user actually typed (e.g. "AA"), not
-                // just the resolved suggestion (e.g. "AAPL"), so re-entering
-                // "AA" surfaces "AA" in the recent-ticker cache too.
-                if (value && value.toUpperCase().trim() !== item.symbol.toUpperCase()) {
-                  rememberTicker(value.toUpperCase().trim());
-                }
-                onChange(item.symbol);
-                setShowSuggestions(false);
-              }}
+           {filtered.map((item) => (
+             <div
+               key={item.symbol}
+               onClick={() => {
+                 // Remember the user's typed input (e.g. "AA") so it surfaces next
+                 // time, and also remember the actually-resolved suggestion (e.g.
+                 // "AAPL") so the full ticker is cached for future use.
+                 if (value && value.toUpperCase().trim() !== item.symbol.toUpperCase()) {
+                   rememberTicker(value.toUpperCase().trim());
+                 }
+                 rememberTicker(item.symbol.toUpperCase(), item.name);
+                 onChange(item.symbol);
+                 setShowSuggestions(false);
+               }}
               style={{
                 padding: '8px 12px',
                 cursor: 'pointer',
