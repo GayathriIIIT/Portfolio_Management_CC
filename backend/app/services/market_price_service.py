@@ -335,13 +335,8 @@ def _format_chart_points(history):
     return points
 
 
-def collect_daily_closes(symbol, start_date, end_date):
-    """Return `{date: close}` daily closing prices for a symbol from `start_date`
-    to `end_date` (both `date` objects, inclusive).
-
-    Used to reconstruct a portfolio's historical NAV series for risk metrics.
-    Best effort: symbols/date ranges with no usable data yield an empty dict.
-    """
+def _raw_daily_closes(symbol, start_date, end_date):
+    """Return `{date: close}` daily closing prices for a symbol from Yahoo directly."""
     import math
 
     ticker = yf.Ticker(symbol)
@@ -369,6 +364,111 @@ def collect_daily_closes(symbol, start_date, end_date):
             continue
         closes[ts.date()] = price_f
     return closes
+
+
+def _daily_close_rows(security_id, db_session=None):
+    """All `{date: close}` rows currently stored for a security in the market_price cache."""
+    session = db_session or db.session
+    if session is None:
+        return {}
+    rows = (
+        session.query(MarketPrice)
+        .filter(MarketPrice.security_id == security_id)
+        .order_by(MarketPrice.as_of.asc())
+        .all()
+    )
+    closes = {}
+    for row in rows:
+        ts = row.as_of
+        if not hasattr(ts, "date"):
+            continue
+        if getattr(ts, "tzinfo", None) is not None:
+            ts = ts.astimezone(timezone.utc)
+        closes[ts.date()] = float(row.price)
+    return closes
+
+
+def _persist_daily_closes(security_id, closes, existing, db_session=None):
+    """Insert daily-close rows that aren't already cached. Returns number stored."""
+    session = db_session or db.session
+    if session is None:
+        return 0
+    stored = 0
+    for day, price in closes.items():
+        if day in existing:
+            continue
+        session.add(
+            MarketPrice(
+                security_id=security_id,
+                price=price,
+                as_of=datetime(day.year, day.month, day.day, tzinfo=timezone.utc),
+                source="yahoo",
+            )
+        )
+        stored += 1
+    if stored:
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+    return stored
+
+
+def _cached_daily_closes(symbol, security_id, start_date, end_date, db_session=None):
+    """DB-first daily closes.
+
+    Reads from the ``market_price`` cache; if nothing is cached for the range it
+    fetches from Yahoo and persists the result, and if only the tail is missing
+    it fetches just the days after the newest cached day. Repeated reconstructions
+    therefore hit the database instead of Yahoo for historical data.
+    """
+    session = db_session or db.session
+    if session is None:
+        return _raw_daily_closes(symbol, start_date, end_date)
+
+    cached = _daily_close_rows(security_id, db_session=session)
+    closes = {d: px for d, px in cached.items() if start_date <= d <= end_date}
+
+    newest = max(cached.keys()) if cached else None
+    if newest is None or newest < end_date:
+        fetch_from = (newest + timedelta(days=1)) if newest else start_date
+        fetched = _raw_daily_closes(symbol, fetch_from, end_date)
+        if fetched:
+            _persist_daily_closes(security_id, fetched, cached, db_session=session)
+            closes.update({d: px for d, px in fetched.items() if start_date <= d <= end_date})
+
+    return closes
+
+
+def backfill_daily_closes(symbol, security_id, start_date, end_date, db_session=None):
+    """Force a full-range pull of a symbol's daily closes into the market_price cache.
+
+    Unlike the on-demand cache path, this always fetches the whole window so a
+    partially-cached range becomes complete. Idempotent — existing rows are kept.
+    Returns ``{"fetched": int, "stored": int}``.
+    """
+    fetched = _raw_daily_closes(symbol, start_date, end_date)
+    stored = 0
+    session = db_session or db.session
+    if session is not None and fetched:
+        existing = _daily_close_rows(security_id, db_session=session)
+        stored = _persist_daily_closes(security_id, fetched, existing, db_session=session)
+    return {"fetched": len(fetched), "stored": stored}
+
+
+def collect_daily_closes(symbol, start_date, end_date, security_id=None, db_session=None):
+    """Return `{date: close}` daily closing prices for a symbol from `start_date`
+    to `end_date` (both `date` objects, inclusive).
+
+    Used to reconstruct a portfolio's historical NAV series for risk metrics.
+    Best effort: symbols/date ranges with no usable data yield an empty dict.
+
+    When ``security_id`` is provided the result is served from (and written to)
+    the ``market_price`` DB cache instead of hitting Yahoo on every call.
+    """
+    if security_id is not None:
+        return _cached_daily_closes(symbol, security_id, start_date, end_date, db_session=db_session)
+    return _raw_daily_closes(symbol, start_date, end_date)
 
 
 def _collect_history(period, interval, start, end, symbol):
@@ -416,6 +516,11 @@ def collect_and_store_price_series(symbol, security_id, range_key="1d", db_sessi
     For short ranges (1d, 7d, 1m) uses yfinance period= parameter.
     For longer ranges (3m, 6m, 1y) uses explicit start/end dates which
     avoids a yfinance quirk where period= can return fewer rows than expected.
+
+    Always fetches live from Yahoo at the range's native granularity so the
+    asset chart keeps its intraday bars — this function is intentionally NOT
+    served from the historical ``market_price`` cache, which only holds daily
+    closes (see ``collect_daily_closes`` / ``backfill_daily_closes``).
     """
     period, interval, start, end = _chart_period_interval(range_key)
     ticker = yf.Ticker(symbol)
@@ -590,6 +695,10 @@ class MarketPriceService:
 
     def get_current_price(self, symbol):
         return self._get_or_refresh(symbol)["price"]
+
+    def get_quote(self, symbol):
+        """Full latest quote (price, name, exchange, currency, sector) for `symbol`."""
+        return self._get_or_refresh(symbol)
 
     def get_historical_price(self, symbol, trade_date, price_type="close"):
         return get_historical_price(symbol, trade_date, price_type=price_type)
