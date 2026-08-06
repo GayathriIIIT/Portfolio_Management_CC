@@ -7,6 +7,7 @@ export function TransactionsPage({ portfolio }) {
   const { isBrainrot } = useTheme();
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('ALL');
+  const [filterHoldingType, setFilterHoldingType] = useState('ALL');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
@@ -45,8 +46,9 @@ export function TransactionsPage({ portfolio }) {
   }
 
   const filtered = transactions.filter((t) => {
-    if (filterType === 'ALL') return true;
-    return t.type === filterType;
+    if (filterType !== 'ALL' && t.type !== filterType) return false;
+    if (filterHoldingType !== 'ALL' && t.security_type !== filterHoldingType) return false;
+    return true;
   });
 
   return (
@@ -88,6 +90,25 @@ export function TransactionsPage({ portfolio }) {
             </div>
           </div>
 
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Filter size={16} style={{ color: 'var(--text-secondary)' }} />
+            <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              Security Type:
+            </span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {['ALL', 'STOCK', 'BOND', 'CASH'].map((type) => (
+                <button
+                  key={type}
+                  className={`btn btn-sm ${filterHoldingType === type ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                  onClick={() => setFilterHoldingType(type)}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             Showing <strong>{filtered.length}</strong> transactions
           </div>
@@ -108,17 +129,18 @@ export function TransactionsPage({ portfolio }) {
           <div className="table-container">
             <table className="data-table">
               <thead>
-                <tr>
-                  <th>Txn ID</th>
-                  <th>Type</th>
-                  <th>Security Ticker</th>
-                  <th style={{ textAlign: 'right' }}>Quantity</th>
-                  <th style={{ textAlign: 'right' }}>Price per Unit</th>
-                  <th style={{ textAlign: 'right' }}>Fees</th>
-                  <th style={{ textAlign: 'right' }}>Total Amount</th>
-                  <th style={{ textAlign: 'right' }}>Executed Timestamp</th>
-                </tr>
-              </thead>
+                 <tr>
+                   <th>Txn ID</th>
+                   <th>Type</th>
+                   <th>Security Type</th>
+                   <th>Security Ticker</th>
+                   <th style={{ textAlign: 'right' }}>Quantity</th>
+                   <th style={{ textAlign: 'right' }}>Price per Unit</th>
+                   <th style={{ textAlign: 'right' }}>Fees</th>
+                   <th style={{ textAlign: 'right' }}>Total Amount</th>
+                   <th style={{ textAlign: 'right' }}>Executed Timestamp</th>
+                 </tr>
+               </thead>
               <tbody>
                 {filtered.map((t) => {
                   const isBuy = t.type === 'BUY' || t.type === 'DEPOSIT';
@@ -129,17 +151,29 @@ export function TransactionsPage({ portfolio }) {
                   const total = isBuy ? gross + feesBase : gross - feesBase;
 
                   return (
-                    <tr key={t.id}>
-                      <td style={{ fontFamily: 'monospace', fontWeight: '600', color: 'var(--text-muted)' }}>
-                        #{t.id}
-                      </td>
-                      <td>
-                        <span className={`badge ${isBuy ? 'badge-success' : 'badge-danger'}`}>
-                          {isBuy ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-                          {t.type}
-                        </span>
-                      </td>
-                      <td style={{ fontWeight: '700' }}>{t.symbol}</td>
+                     <tr key={t.id}>
+                       <td style={{ fontFamily: 'monospace', fontWeight: '600', color: 'var(--text-muted)' }}>
+                         #{t.id}
+                       </td>
+                       <td>
+                         <span className={`badge ${isBuy ? 'badge-success' : 'badge-danger'}`}>
+                           {isBuy ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                           {t.type}
+                         </span>
+                       </td>
+                       <td>
+                         <span className="badge badge-secondary" style={{ fontSize: '0.72rem', fontWeight: '700' }}>
+                           {t.security_type || 'UNKNOWN'}
+                         </span>
+                       </td>
+                       <td style={{ fontWeight: '700' }}>
+                         {t.symbol}
+                         {t.name && (
+                           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: '500' }}>
+                             {t.name}
+                           </div>
+                         )}
+                       </td>
                       <td style={{ textAlign: 'right', fontWeight: '600' }}>
                         {Number(t.quantity).toLocaleString()}
                       </td>

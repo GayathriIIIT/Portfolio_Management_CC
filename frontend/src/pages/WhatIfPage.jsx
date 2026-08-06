@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Plus, X } from 'lucide-react';
+import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Plus, X, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { useTheme } from '../context/ThemeContext';
@@ -49,6 +49,13 @@ export function WhatIfPage({ portfolio }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
+
+  // Saved-scenario re-run state (Show Results / Recheck popups)
+  const [scenarioResult, setScenarioResult] = useState(null);
+  const [scenarioPopupOpen, setScenarioPopupOpen] = useState(false);
+  const [scenarioPopupTitle, setScenarioPopupTitle] = useState('');
+  const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [scenarioError, setScenarioError] = useState(null);
 
   // Sync sandbox basket to localStorage
   useEffect(() => {
@@ -208,6 +215,58 @@ export function WhatIfPage({ portfolio }) {
     }
   };
 
+  // Re-run a single saved What-if row and show the refreshed result in a
+  // popup. `mode` controls how the price is rebuilt from the stored row:
+  //   - 'snapshot': use the saved hypothetical price (Results)
+  //   - 'live'    : re-resolve the historical price in real-time (Recheck)
+  const rerunSavedRow = async (row, title, mode) => {
+    if (!portfolio?.id) return;
+    if (!row) return;
+
+    setScenarioLoading(true);
+    setScenarioError(null);
+    setScenarioResult(null);
+    setScenarioPopupTitle(title);
+    setScenarioPopupOpen(true);
+
+    try {
+      const symbol = (row.symbol || '').toUpperCase().trim();
+      if (!symbol) {
+        throw new Error('This what-if row is missing a symbol and cannot be rechecked');
+      }
+
+      const payload = {
+        scenario_name: row.scenario_name || 'default',
+        symbol,
+      };
+
+      const isHistorical = row.price_source === 'historical' && row.trade_date;
+
+      if (mode === 'live' && isHistorical) {
+        // Recheck: let the backend re-resolve the historical price for the
+        // stored trade date in real time (deterministic per date).
+        payload.date = row.trade_date;
+        payload.price_type = row.price_type || 'close';
+      } else {
+        // Results / manual recheck: rebuild from the stored hypothetical price
+        // on this specific row only.
+        payload.price = Number(row.hypothetical_price);
+      }
+
+      const res = await api.runWhatIf(portfolio.id, payload);
+      setScenarioResult(res);
+    } catch (err) {
+      setScenarioError(err.message);
+    } finally {
+      setScenarioLoading(false);
+    }
+  };
+
+  const handleShowResults = (row) =>
+    rerunSavedRow(row, `Scenario Results: ${row.scenario_name} (${row.symbol || 'row ' + row.id})`, 'snapshot');
+  const handleRecheck = (row) =>
+    rerunSavedRow(row, `Rechecked Scenario: ${row.scenario_name} (${row.symbol || 'row ' + row.id})`, 'live');
+
   // List of active symbols depending on portfolio vs sandbox scope. Portfolio
   // cash components ({CCY}-CASH) are excluded — they have no target price to
   // enter and are never revalued, so don't force a price for them.
@@ -221,8 +280,133 @@ export function WhatIfPage({ portfolio }) {
   // price, while a sandbox run shows the live quote used as its cost basis.
   const isSandboxResult = !!simulationResult && simulationResult.portfolio_id == null;
 
+  const getScenarioProfitLoss = (res) => {
+    if (!res) return 0;
+    return res.portfolio_id == null
+      ? ((res.invested_value ?? 0) - (res.current_value ?? 0))
+      : (res.reverse_profit_loss ?? res.profit_loss ?? 0);
+  };
+
+  const getScenarioProfitLossPercentage = (res) => {
+    if (!res) return 0;
+    return res.portfolio_id == null
+      ? (res.invested_value ? (((res.invested_value ?? 0) - (res.current_value ?? 0)) / res.invested_value * 100) : 0)
+      : (res.reverse_profit_loss_pct ?? res.profit_loss_percentage ?? 0);
+  };
+
+  const simulationProfitLoss = getScenarioProfitLoss(simulationResult);
+  const simulationProfitLossPercentage = getScenarioProfitLossPercentage(simulationResult);
+
+  const getPortfolioLiveValue = (res) => {
+    if (!res) return 0;
+    if (res.live_value != null) return res.live_value;
+    return (res.holdings || []).reduce((sum, h) => {
+      const qty = Number(h.quantity ?? 0);
+      const live = Number(h.live_price ?? h.current_price ?? 0);
+      return sum + (qty * live);
+    }, 0);
+  };
+
+  // Condensed result renderer for the "Results" / "Recheck" popups. Mirrors
+  // the inline result cards but fits inside a modal.
+  const renderScenarioResult = (res) => {
+    if (!res) return null;
+    const isSandbox = res.portfolio_id == null;
+    const pl = isSandbox
+      ? ((res.invested_value ?? 0) - (res.current_value ?? 0))
+      : (res.reverse_profit_loss ?? res.profit_loss ?? 0);
+    const plPct = isSandbox
+      ? (res.invested_value ? (((res.invested_value ?? 0) - (res.current_value ?? 0)) / res.invested_value * 100) : 0)
+      : (res.reverse_profit_loss_pct ?? res.profit_loss_percentage ?? 0);
+    const isGain = pl >= 0;
+    const baselineValue = isSandbox ? (res.invested_value ?? 0) : getPortfolioLiveValue(res);
+    return (
+      <div>
+        <div
+          style={{
+            backgroundColor: 'var(--accent-light)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--accent-border)',
+            marginBottom: '16px',
+          }}
+        >
+          <div style={{ fontSize: '0.8rem', color: 'var(--accent-primary)', textTransform: 'uppercase', fontWeight: '800' }}>
+            Scenario: {res.scenario_name}
+          </div>
+          <div style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--text-primary)', marginTop: '4px' }}>
+            ${res.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            {isSandbox ? 'Hypothetical Basket Market Value' : 'Hypothetical Portfolio Market Value'}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+          <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px 16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', flex: 1, minWidth: '130px' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {isSandbox ? 'Cost to Build Basket (live)' : 'Portfolio Value Today (live)'}
+            </div>
+            <div style={{ fontWeight: '800', fontSize: '1.05rem' }}>
+              ${baselineValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+          <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px 16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', flex: 1, minWidth: '130px' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {isSandbox ? 'Simulated P&L (vs live cost)' : 'Scenario P&L (vs live today)'}
+            </div>
+            <div style={{ fontWeight: '800', fontSize: '1.05rem', color: isGain ? 'var(--success)' : 'var(--danger-text)' }}>
+              {isGain ? '+' : ''}${pl.toLocaleString(undefined, { minimumFractionDigits: 2 })} ({isGain ? '+' : ''}{plPct.toFixed(2)}%)
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontWeight: '700', fontSize: '0.85rem', marginBottom: '8px' }}>
+          Position Details
+        </div>
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th style={{ textAlign: 'right' }}>{isSandbox ? 'Hyp. Price' : 'Cost / Share'}</th>
+                {!isSandbox && <th style={{ textAlign: 'right' }}>Simulated Price</th>}
+                <th style={{ textAlign: 'right' }}>Current Price (live)</th>
+                <th style={{ textAlign: 'right' }}>Market Value</th>
+                <th style={{ textAlign: 'right' }}>P&L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(res.holdings || []).map((h, i) => {
+                const costPrice = h.hypothetical_price ?? h.purchase_price ?? 0;
+                const simPrice = h.current_price ?? 0;
+                const livePrice = isSandbox ? (h.current_price ?? 0) : (h.live_price ?? h.current_price ?? 0);
+                const qty = h.quantity ?? 1;
+                const rowPl = isSandbox ? ((h.cost_basis ?? 0) - (h.market_value ?? 0)) : (livePrice - simPrice) * qty;
+                const rowGain = rowPl >= 0;
+                return (
+                  <tr key={i}>
+                    <td style={{ fontWeight: '800' }}>{h.symbol}</td>
+                    <td style={{ textAlign: 'right' }}>${costPrice.toFixed(2)}</td>
+                    {!isSandbox && <td style={{ textAlign: 'right' }}>${simPrice.toFixed(2)}</td>}
+                    <td style={{ textAlign: 'right' }}>${livePrice.toFixed(2)}</td>
+                    <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                      ${(h.market_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </td>
+                    <td style={{ textAlign: 'right' }} className={rowGain ? 'text-positive' : 'text-negative'}>
+                      {rowGain ? '+' : ''}${rowPl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div>
+    <>
       <div className="page-title-row">
         <div>
           <h1 className="page-title">What-If Scenario Simulator</h1>
@@ -483,19 +667,19 @@ export function WhatIfPage({ portfolio }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>{isSandboxResult ? 'Cost to Build Basket (live)' : 'Simulated Cost Basis'}</div>
+                  <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>{isSandboxResult ? 'Cost to Build Basket (live)' : 'Portfolio Value Today (live)'}</div>
                   <div style={{ fontWeight: '800', fontSize: '1.1rem' }}>
-                    ${simulationResult.invested_value.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    ${(isSandboxResult ? simulationResult.invested_value : getPortfolioLiveValue(simulationResult)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </div>
                 </div>
 
                 <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                   <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>
-                    {isSandboxResult ? 'Simulated P&L (vs live cost)' : 'P&L if bought at simulated price (vs today)'}
+                    {isSandboxResult ? 'Simulated Gain/Loss (vs live cost)' : 'Scenario P&L (vs live today)'}
                   </div>
-                  <div className={`font-bold text-lg ${(isSandboxResult ? simulationResult.profit_loss : (simulationResult.reverse_profit_loss ?? simulationResult.profit_loss)) >= 0 ? 'text-positive' : 'text-negative'}`} style={{ fontWeight: '800', fontSize: '1.1rem' }}>
-                    {(isSandboxResult ? simulationResult.profit_loss : (simulationResult.reverse_profit_loss ?? simulationResult.profit_loss)) >= 0 ? '+' : ''}
-                    ${(isSandboxResult ? simulationResult.profit_loss : (simulationResult.reverse_profit_loss ?? simulationResult.profit_loss)).toLocaleString(undefined, { minimumFractionDigits: 2 })} ({(isSandboxResult ? simulationResult.profit_loss_percentage : (simulationResult.reverse_profit_loss_pct ?? simulationResult.profit_loss_percentage)).toFixed(2)}%)
+                  <div className={`font-bold text-lg ${simulationProfitLoss >= 0 ? 'text-positive' : 'text-negative'}`} style={{ fontWeight: '800', fontSize: '1.1rem' }}>
+                    {simulationProfitLoss >= 0 ? '+' : ''}
+                    ${simulationProfitLoss.toLocaleString(undefined, { minimumFractionDigits: 2 })} ({simulationProfitLossPercentage.toFixed(2)}%)
                   </div>
                 </div>
               </div>
@@ -524,15 +708,14 @@ export function WhatIfPage({ portfolio }) {
                         ? (h.current_price ?? 0)
                         : (h.live_price ?? h.current_price ?? 0);
                       const qty = h.quantity ?? 1;
-                      // Sandbox mode: P&L = (target − live) × qty (backend computed).
-                      // Portfolio mode: P&L = (live − simulated) × qty (user-chosen
-                      // reverse math: bought at the simulated price, held to today).
+                      // Sandbox mode: gain/loss versus live cost uses (live - hypothetical).
+                      // Portfolio mode: P&L = (live − simulated) × qty.
                       const pl = isSandboxResult
-                        ? (h.profit_loss ?? 0)
+                        ? ((h.cost_basis ?? 0) - (h.market_value ?? 0))
                         : (livePrice - simPrice) * qty;
                       const plPct = isSandboxResult
-                        ? (h.profit_loss_percentage ?? 0)
-                        : (simPrice !== 0 ? ((livePrice - simPrice) / simPrice) * 100 : 0);
+                        ? (h.cost_basis ? (((h.cost_basis ?? 0) - (h.market_value ?? 0)) / h.cost_basis) * 100 : 0)
+                        : (livePrice !== 0 ? ((livePrice - simPrice) / livePrice) * 100 : 0);
                       const plClass = pl >= 0 ? 'text-positive' : 'text-negative';
                       return (
                         <tr key={i}>
@@ -557,14 +740,14 @@ export function WhatIfPage({ portfolio }) {
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
                 {isSandboxResult
-                  ? 'P&L = (Hyp. price − current price) × quantity. A target price above today\u2019s price shows a profit; below it shows a loss.'
-                  : 'P&L = (current live price − simulated price) × quantity. A simulated price below today\u2019s live price shows a profit (bought at the simulated price, held to today); above it shows a loss.'}
+                  ? 'P&L = (current price − hyp. price) × quantity. A target price below today\u2019s price shows a profit; above it shows a loss.'
+                  : 'P&L = (current live price − simulated price) × quantity. A simulated price above today’s live price shows a loss (the scenario values the portfolio higher than today); below it shows a profit.'}
               </div>
               {isBrainrot && (
-                <div className={`brainrot-side-gif whatif ${simulationResult.profit_loss >= 0 ? 'profit' : 'loss'}`} style={{ marginTop: '16px' }}>
+                <div className={`brainrot-side-gif whatif ${simulationProfitLoss >= 0 ? 'profit' : 'loss'}`} style={{ marginTop: '16px' }}>
                   <img
-                    src={simulationResult.profit_loss >= 0 ? '/brainrot/what-if-profit-67meme.gif' : '/brainrot/FAHH-what-if-loss.gif'}
-                    alt={simulationResult.profit_loss >= 0 ? 'Simulation in profit' : 'Simulation in loss'}
+                    src={simulationProfitLoss >= 0 ? '/brainrot/what-if-profit-67meme.gif' : '/brainrot/FAHH-what-if-loss.gif'}
+                    alt={simulationProfitLoss >= 0 ? 'Simulation in profit' : 'Simulation in loss'}
                   />
                 </div>
               )}
@@ -609,15 +792,31 @@ export function WhatIfPage({ portfolio }) {
                     <td><span className="badge badge-secondary">{row.price_source}</span></td>
                     <td>{row.price_type || 'manual'}</td>
                     <td>{row.trade_date ? new Date(row.trade_date).toLocaleDateString() : 'N/A'}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button
-                        className="btn btn-secondary btn-sm text-negative"
-                        onClick={() => handleDeleteEntry(row.id)}
-                        title="Delete scenario row"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
+                     <td style={{ textAlign: 'center' }}>
+                       <button
+                         className="btn btn-secondary btn-sm"
+                         title="Show simulation results for this row"
+                         onClick={() => handleShowResults(row)}
+                       >
+                         <Play size={12} />
+                         <span>Results</span>
+                       </button>
+                       <button
+                         className="btn btn-secondary btn-sm"
+                         title="Re-check this row with fresh market prices"
+                         onClick={() => handleRecheck(row)}
+                       >
+                         <RefreshCw size={12} />
+                         <span>Recheck</span>
+                       </button>
+                       <button
+                         className="btn btn-secondary btn-sm text-negative"
+                         onClick={() => handleDeleteEntry(row.id)}
+                         title="Delete scenario row"
+                       >
+                         <Trash2 size={14} />
+                       </button>
+                     </td>
                   </tr>
                 ))}
               </tbody>
@@ -625,6 +824,41 @@ export function WhatIfPage({ portfolio }) {
           </div>
         )}
       </div>
-    </div>
+
+    {scenarioPopupOpen && (
+      <div className="modal-overlay" onClick={() => setScenarioPopupOpen(false)}>
+        <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-header">
+            <h2 className="modal-title">{scenarioPopupTitle}</h2>
+            <button className="modal-close" onClick={() => setScenarioPopupOpen(false)} title="Close">
+              <X size={18} />
+            </button>
+          </div>
+          <div style={{ padding: '8px 8px 0' }}>
+            {scenarioLoading && (
+              <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                Re-running scenario…
+              </div>
+            )}
+            {scenarioError && (
+              <div style={{ padding: '24px', color: 'var(--danger)', textAlign: 'center' }}>
+                {scenarioError}
+              </div>
+            )}
+            {!scenarioLoading && !scenarioError && scenarioResult && (
+              <div style={{ padding: '8px' }}>
+                {renderScenarioResult(scenarioResult)}
+              </div>
+            )}
+            {!scenarioLoading && !scenarioError && !scenarioResult && (
+              <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                No results.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

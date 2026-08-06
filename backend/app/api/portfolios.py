@@ -847,7 +847,12 @@ def _serialize_transaction(txn, base_currency="USD"):
     return {
         "id": txn.id,
         "symbol": txn.security.symbol,
+        "name": txn.security.name,
         "type": txn.txn_type,
+        # Security holding type (STOCK / BOND / CASH) — drives the ledger's
+        # security-type filter and lets the UI label cash vs. bond vs. equity
+        # transactions distinctly from the BUY/SELL/DEPOSIT/WITHDRAW txn type.
+        "security_type": txn.security.type,
         "quantity": float(txn.quantity),
         "price": float(txn.price),
         "fees": float(txn.fees),
@@ -1764,20 +1769,20 @@ def portfolio_what_if(portfolio_id):
         else:
             result = _compute_portfolio_metrics(portfolio, override_prices=override_prices)
             # Portfolio-mode "Current Portfolio Holdings" scenarios revalue the
-            # basket at a simulated price. The user asked for P&L to read as
-            # "bought at the simulated price, held to today": (today's live price
-            # − simulated price) x qty, which is the exact reverse of the
-            # cost-basis math `_compute_portfolio_metrics` reports. `live_price`
-            # is resolved per holding in `_serialize_holding`.
+            # basket at a simulated (hypothetical) price. Display the scenario
+            # P&L as "today's live value vs the hypothetical scenario":
+            # (today's live price - simulated price) x qty -- a bull scenario
+            # (hypothetical price above today) reads as a loss, and a bear
+            # scenario (hypothetical price below today) reads as a profit.
+            # `live_price` is resolved per holding in `_serialize_holding`.
             live_value = sum(
                 float(h.get("live_price", h.get("current_price", 0.0))) * float(h["quantity"])
                 for h in result["holdings"]
             )
             result["live_value"] = round(live_value, 4)
             result["reverse_profit_loss"] = round(live_value - result["current_value"], 4)
-            sim_value = result["current_value"]
             result["reverse_profit_loss_pct"] = round(
-                (result["reverse_profit_loss"] / sim_value * 100) if sim_value else 0.0,
+                (result["reverse_profit_loss"] / live_value * 100) if live_value else 0.0,
                 4,
             )
 

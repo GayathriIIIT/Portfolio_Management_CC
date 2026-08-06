@@ -298,18 +298,26 @@ export function TradeModal({
               />
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Execution Price ({quoteCurrency || currency})</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                className="form-input"
-                placeholder="Market Price"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-              />
-              {isForeignQuote && Number(price) > 0 && (
+               <div className="form-group">
+                <label className="form-label">
+                  Execution Price ({quoteCurrency || currency})
+                  {txnType === 'BUY' && (
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: '500', marginLeft: '6px' }}>
+                      (read-only — set via live quote)
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  className="form-input"
+                  placeholder="Market Price"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  readOnly={txnType === 'BUY'}
+                />
+               {isForeignQuote && Number(price) > 0 && (
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '4px', fontWeight: '500' }}>
                   ≈ {formatMoney(Number(price) * fxRate)} / share in {currency}
                 </div>

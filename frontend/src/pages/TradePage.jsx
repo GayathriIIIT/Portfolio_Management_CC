@@ -380,7 +380,14 @@ export function TradePage({ portfolio, walletBalance = 0, currency = 'USD', onTr
               </div>
 
               <div className="form-group">
-                <label className="form-label">Order Price</label>
+                <label className="form-label">
+                  Order Price
+                  {txnType === 'BUY' && (
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: '500', marginLeft: '6px' }}>
+                      (read-only — set via live quote)
+                    </span>
+                  )}
+                </label>
                 <input
                   type="number"
                   step="0.01"
@@ -389,6 +396,7 @@ export function TradePage({ portfolio, walletBalance = 0, currency = 'USD', onTr
                   placeholder="Market Price"
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
+                  readOnly={txnType === 'BUY'}
                 />
               </div>
             </div>
