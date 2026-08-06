@@ -103,6 +103,7 @@ CREATE INDEX ix_txn_portfolio ON portfolio_transaction(portfolio_id, executed_at
 --    STOCK/BOND → observed market price; CASH → typically 1.0 or omitted.
 --    Enables historical charts and reproducible analytics.
 -- =========================================================================
+
 CREATE TABLE market_price (
     id           BIGINT        PRIMARY KEY AUTO_INCREMENT,
     security_id  BIGINT        NOT NULL,

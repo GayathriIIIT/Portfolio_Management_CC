@@ -5,6 +5,7 @@ import { api } from './services/api';
 
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
+import UserTour from './components/UserTour';
 
 import { DashboardPage } from './pages/DashboardPage';
 import { HoldingsPage } from './pages/HoldingsPage';
@@ -267,6 +268,8 @@ export function AppContent() {
           onBackfillHistory={handleBackfillHistory}
           isBackfilling={isBackfilling}
         />
+
+        <UserTour />
 
         <main className="page-content">
           {loading ? (

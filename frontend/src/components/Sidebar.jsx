@@ -56,6 +56,7 @@ export function Sidebar({ activeTab, setActiveTab, activePortfolio }) {
           return (
             <button
               key={item.id}
+              data-tour={`nav-${item.id}`}
               className={`nav-link ${isActive ? 'active' : ''}`}
               onClick={() => setActiveTab(item.id)}
             >
