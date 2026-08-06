@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, DollarSign, CheckCircle, AlertCircle } from 'lucide-react';
+import { X, DollarSign, CheckCircle, AlertCircle, Plus } from 'lucide-react';
 import { api } from '../services/api';
+
+const AMOUNT_SUGGESTIONS = [100, 200, 500, 1000, 2000, 5000, 10000];
 
 export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = 'USD', onSuccess, initialAction = 'DEPOSIT' }) {
   const [actionType, setActionType] = useState(initialAction);
@@ -19,6 +21,10 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
       setActionType(initialAction);
     }
   }, [isOpen, baseCurrency, initialAction]);
+
+  const handleSuggestionClick = (suggestedAmount) => {
+    setAmount(String(suggestedAmount));
+  };
 
   if (!isOpen) return null;
 
@@ -118,6 +124,22 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
               onChange={(e) => setAmount(e.target.value)}
               required
             />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+              {AMOUNT_SUGGESTIONS.map((amt) => (
+                <button
+                  key={amt}
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                  onClick={() => handleSuggestionClick(amt)}
+                >
+                  {amt >= 1000 ? `${amt/1000}k` : amt}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              Quick amounts or enter custom value
+            </div>
           </div>
 
           <div className="form-group">

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Search, ArrowUpRight, ArrowDownRight, Plus, ShoppingCart, DollarSign, Activity, X, PencilLine } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
-import { HoldingAnalyticsPanel } from './HoldingAnalyticsPanel';
+import { HoldingAnalyticsModal } from './HoldingAnalyticsModal';
 
 export function HoldingsTable({
   holdings,
@@ -13,7 +13,8 @@ export function HoldingsTable({
 }) {
   const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedSymbol, setExpandedSymbol] = useState(null);
+  const [analyticsModalOpen, setAnalyticsModalOpen] = useState(false);
+  const [selectedHolding, setSelectedHolding] = useState(null);
 
   const handlePriceOverride = async (h) => {
     const current = h.price_override != null ? h.price_override : h.native_current_price;
@@ -133,7 +134,7 @@ export function HoldingsTable({
                 const isGain = (h.unrealized_pl || 0) >= 0;
                 const isCagrGain = (h.cagr || 0) >= 0;
                 const isCash = String(h.symbol || '').toUpperCase().endsWith('-CASH');
-                const isExpanded = expandedSymbol === h.id;
+
                 return (
                   <React.Fragment key={h.id}>
                     <tr>
@@ -187,62 +188,51 @@ export function HoldingsTable({
                           </button>
                         ) : (
                         <>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px' }}
-                          onClick={() => setExpandedSymbol(isExpanded ? null : h.id)}
-                          title="Show risk analytics for this security"
-                        >
-                          {isExpanded ? <X size={12} /> : <Activity size={12} />}
-                          <span>Analytics</span>
-                        </button>
-                        {h.type === 'BOND' && onPriceOverride && (
                           <button
                             className="btn btn-secondary btn-sm"
                             style={{ padding: '4px 8px' }}
-                            onClick={() => handlePriceOverride(h)}
-                            title="Set a manual current price override for this bond"
+                            onClick={() => { setSelectedHolding(h); setAnalyticsModalOpen(true); }}
+                            title="Show risk analytics for this security"
                           >
-                            <PencilLine size={12} />
-                            <span>{h.price_override != null ? 'Override' : 'Price'}</span>
+                            <Activity size={12} />
+                            <span>Analytics</span>
                           </button>
-                        )}
-                        {showBuyPosition && (
+                          {h.type === 'BOND' && onPriceOverride && (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '4px 8px' }}
+                              onClick={() => handlePriceOverride(h)}
+                              title="Set a manual current price override for this bond"
+                            >
+                              <PencilLine size={12} />
+                              <span>{h.price_override != null ? 'Override' : 'Price'}</span>
+                            </button>
+                          )}
+                          {showBuyPosition && (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '4px 8px' }}
+                              onClick={() => onOpenTradeModal('BUY', h.symbol)}
+                              title="Buy more"
+                            >
+                              <Plus size={12} />
+                              <span>Buy</span>
+                            </button>
+                          )}
                           <button
                             className="btn btn-secondary btn-sm"
                             style={{ padding: '4px 8px' }}
-                            onClick={() => onOpenTradeModal('BUY', h.symbol)}
-                            title="Buy more"
+                            onClick={() => onOpenTradeModal('SELL', h.symbol)}
+                            title="Sell shares"
                           >
-                            <Plus size={12} />
-                            <span>Buy</span>
+                            <ShoppingCart size={12} />
+                            <span>Sell</span>
                           </button>
-                        )}
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px' }}
-                          onClick={() => onOpenTradeModal('SELL', h.symbol)}
-                          title="Sell shares"
-                        >
-                          <ShoppingCart size={12} />
-                          <span>Sell</span>
-                        </button>
                         </>
                         )}
                       </div>
                     </td>
                   </tr>
-                  {isExpanded && (
-                    <tr>
-                      <td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                        <HoldingAnalyticsPanel
-                          symbol={h.symbol}
-                          currency={h.currency || currency}
-                          onClose={() => setExpandedSymbol(null)}
-                        />
-                      </td>
-                    </tr>
-                  )}
                   </React.Fragment>
                 );
               })}
@@ -250,6 +240,15 @@ export function HoldingsTable({
           </table>
         </div>
       )}
+
+      {/* Analytics Modal */}
+      <HoldingAnalyticsModal
+        isOpen={analyticsModalOpen}
+        onClose={() => { setAnalyticsModalOpen(false); setSelectedHolding(null); }}
+        symbol={selectedHolding?.symbol}
+        currency={selectedHolding?.currency || currency}
+        holdingData={selectedHolding}
+      />
     </div>
   );
 }

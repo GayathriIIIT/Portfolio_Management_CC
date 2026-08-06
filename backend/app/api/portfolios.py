@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
@@ -744,6 +745,19 @@ def _parse_quantities(payload, symbols):
     return quantities
 
 
+def _serialize_json_field(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _compute_symbol_cart_metrics(symbols, override_prices, quantities=None, base_currency="USD"):
     """Standalone "sandbox cart valuation.
 
@@ -848,6 +862,7 @@ def _serialize_transaction(txn, base_currency="USD"):
         "id": txn.id,
         "symbol": txn.security.symbol,
         "type": txn.txn_type,
+        "security_type": txn.security.type,
         "quantity": float(txn.quantity),
         "price": float(txn.price),
         "fees": float(txn.fees),
@@ -1696,6 +1711,7 @@ def portfolio_what_if(portfolio_id):
     price_type = "close"
     custom_symbols = _parse_symbol_list(payload)
     quantities = _parse_quantities(payload, custom_symbols)
+    scenario_payload = json.loads(json.dumps(payload))
 
     if "prices" in payload:
         price_map = payload.get("prices", {})
@@ -1781,6 +1797,9 @@ def portfolio_what_if(portfolio_id):
                 4,
             )
 
+        result["scenario_name"] = scenario_name
+        result_snapshot = json.dumps(result)
+
         for symbol, value in override_prices.items():
             security = _get_or_create_security(symbol)
             existing_row = WhatifPrice.query.filter_by(
@@ -1798,6 +1817,8 @@ def portfolio_what_if(portfolio_id):
                         price_type=price_type if price_mode == "historical" else None,
                         trade_date=trade_date,
                         price_source=price_mode,
+                        scenario_payload=json.dumps(scenario_payload),
+                        result_snapshot=result_snapshot,
                     )
                 )
             else:
@@ -1805,10 +1826,11 @@ def portfolio_what_if(portfolio_id):
                 existing_row.price_type = price_type if price_mode == "historical" else None
                 existing_row.trade_date = trade_date
                 existing_row.price_source = price_mode
+                existing_row.scenario_payload = json.dumps(scenario_payload)
+                existing_row.result_snapshot = result_snapshot
 
         db.session.commit()
 
-        result["scenario_name"] = scenario_name
         return jsonify(result)
     except Exception:
         db.session.rollback()
@@ -1837,6 +1859,8 @@ def list_portfolio_what_if(portfolio_id):
                 "price_type": row.price_type,
                 "trade_date": row.trade_date.isoformat() if row.trade_date else None,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
+                "scenario_payload": _serialize_json_field(row.scenario_payload),
+                "result_snapshot": _serialize_json_field(row.result_snapshot),
             }
         )
 

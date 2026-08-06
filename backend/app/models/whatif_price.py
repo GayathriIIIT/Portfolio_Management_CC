@@ -23,4 +23,6 @@ class WhatifPrice(db.Model):
     price_type = db.Column(db.String(16))
     trade_date = db.Column(db.Date)
     price_source = db.Column(db.String(16), nullable=False, default="manual")
+    scenario_payload = db.Column(db.Text)
+    result_snapshot = db.Column(db.Text)
     created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

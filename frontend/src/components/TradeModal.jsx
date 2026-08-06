@@ -305,10 +305,17 @@ export function TradeModal({
                 step="0.01"
                 min="0.01"
                 className="form-input"
-                placeholder="Market Price"
+                placeholder={txnType === 'BUY' ? 'Auto-filled from live quote' : 'Market Price'}
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
+                readOnly={txnType === 'BUY'}
+                style={{ backgroundColor: txnType === 'BUY' ? 'var(--bg-app)' : 'transparent' }}
               />
+              {txnType === 'BUY' && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px', fontWeight: '500' }}>
+                  Price is locked for buys and auto-populated from the latest market quote.
+                </div>
+              )}
               {isForeignQuote && Number(price) > 0 && (
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '4px', fontWeight: '500' }}>
                   ≈ {formatMoney(Number(price) * fxRate)} / share in {currency}

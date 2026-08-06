@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Plus, X } from 'lucide-react';
+import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Plus, X, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { useTheme } from '../context/ThemeContext';
@@ -48,6 +48,7 @@ export function WhatIfPage({ portfolio }) {
   const [savedEntries, setSavedEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [showingScenario, setShowingScenario] = useState(null); // { scenarioName, result, isRecheck }
   const requestIdRef = useRef(0);
 
   // Sync sandbox basket to localStorage
@@ -119,6 +120,110 @@ export function WhatIfPage({ portfolio }) {
 
   const handleRemoveSandboxPosition = (sym) => {
     setSandboxBasket((prev) => prev.filter((item) => item.symbol !== sym));
+  };
+
+  // Group saved entries by scenario_name
+  const groupedScenarios = savedEntries.reduce((acc, entry) => {
+    if (!acc[entry.scenario_name]) {
+      acc[entry.scenario_name] = {
+        scenario_name: entry.scenario_name,
+        price_source: entry.price_source,
+        price_type: entry.price_type,
+        trade_date: entry.trade_date,
+        entries: [],
+        created_at: entry.created_at,
+        scenario_payload: entry.scenario_payload,
+        result_snapshot: entry.result_snapshot,
+      };
+    }
+    if (!acc[entry.scenario_name].scenario_payload && entry.scenario_payload) {
+      acc[entry.scenario_name].scenario_payload = entry.scenario_payload;
+    }
+    if (!acc[entry.scenario_name].result_snapshot && entry.result_snapshot) {
+      acc[entry.scenario_name].result_snapshot = entry.result_snapshot;
+    }
+    acc[entry.scenario_name].entries.push(entry);
+    return acc;
+  }, {});
+
+  const handleShowResults = async (scenario) => {
+    if (!portfolio?.id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      // Build payload from saved entries to re-run simulation
+      const payload = {
+        scenario_name: scenario.scenario_name,
+      };
+
+      if (scenario.price_source === 'manual') {
+        const prices = {};
+        scenario.entries.forEach(e => {
+          prices[e.symbol] = e.hypothetical_price;
+        });
+        payload.prices = prices;
+        
+        // If sandbox scenario, include quantities
+        if (scenario.entries.some(e => e.symbol)) {
+          // Check if this was a sandbox scenario by looking at symbols not in current portfolio
+          const portfolioSymbols = portfolio.holdings?.map(h => h.symbol) || [];
+          const isSandbox = scenario.entries.some(e => !portfolioSymbols.includes(e.symbol));
+          if (isSandbox) {
+            payload.symbols = scenario.entries.map(e => e.symbol);
+            // We don't have quantities saved, so use 1 as default
+            payload.quantities = {};
+            scenario.entries.forEach(e => { payload.quantities[e.symbol] = 1; });
+          }
+        }
+      } else {
+        payload.date = scenario.trade_date;
+        payload.price_type = scenario.price_type || 'close';
+        // Include symbols if it was a custom symbol scenario
+        const portfolioSymbols = portfolio.holdings?.map(h => h.symbol) || [];
+        const customSymbols = scenario.entries
+          .map(e => e.symbol)
+          .filter(s => !portfolioSymbols.includes(s));
+        if (customSymbols.length > 0) {
+          payload.symbols = customSymbols;
+        }
+      }
+
+      if (scenario.result_snapshot) {
+        setShowingScenario({ scenarioName: scenario.scenario_name, result: scenario.result_snapshot, isRecheck: false });
+        return;
+      }
+
+      const res = await api.runWhatIf(portfolio.id, payload);
+      setShowingScenario({ scenarioName: scenario.scenario_name, result: res, isRecheck: false });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRecheck = async (scenario) => {
+    if (!portfolio?.id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = scenario.scenario_payload
+        ? { ...scenario.scenario_payload, scenario_name: `${scenario.scenario_name} (Recheck)` }
+        : {
+            scenario_name: scenario.scenario_name + ' (Recheck)',
+          };
+
+      const res = await api.runWhatIf(portfolio.id, payload);
+      setShowingScenario({ scenarioName: scenario.scenario_name, result: res, isRecheck: true });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCloseScenarioView = () => {
+    setShowingScenario(null);
   };
 
   const handleRunSimulation = async (e) => {
@@ -573,6 +678,143 @@ export function WhatIfPage({ portfolio }) {
         </div>
       </div>
 
+      {/* Scenario Result View (Show Results / Recheck) */}
+      {showingScenario && (
+        <div className="modal-overlay" style={{ zIndex: 120 }} onClick={handleCloseScenarioView}>
+          <div className="modal-content" style={{ maxWidth: '900px', maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '16px',
+              paddingBottom: '12px',
+              borderBottom: '1px solid var(--border-color)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FlaskConical size={20} style={{ color: 'var(--accent-primary)' }} />
+                <span style={{ fontWeight: '700', fontSize: '1.1rem' }}>
+                  {showingScenario.isRecheck ? 'Recheck Result' : 'Saved Result'} — {showingScenario.scenarioName}
+                </span>
+                {showingScenario.isRecheck && (
+                  <span className="badge badge-warning" style={{ fontSize: '0.7rem' }}>Live Recheck</span>
+                )}
+              </div>
+              <button className="btn btn-secondary btn-sm" onClick={handleCloseScenarioView}>
+                <X size={14} />
+                <span>Close</span>
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
+              {showingScenario.result && (
+                <>
+                  <div
+                    style={{
+                      backgroundColor: 'var(--accent-light)',
+                      padding: '16px',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--accent-border)',
+                      marginBottom: '20px',
+                    }}
+                  >
+                    <div style={{ fontSize: '0.8rem', color: 'var(--accent-primary)', textTransform: 'uppercase', fontWeight: '800' }}>
+                      Scenario: {showingScenario.result.scenario_name}
+                    </div>
+                    <div style={{ fontSize: '1.75rem', fontWeight: '800', color: 'var(--text-primary)', marginTop: '4px' }}>
+                      ${showingScenario.result.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      Hypothetical Portfolio Market Value
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>
+                        {showingScenario.result.portfolio_id == null ? 'Cost to Build Basket (live)' : 'Simulated Cost Basis'}
+                      </div>
+                      <div style={{ fontWeight: '800', fontSize: '1.1rem' }}>
+                        ${showingScenario.result.invested_value.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+
+                    <div style={{ backgroundColor: 'var(--bg-app)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ fontSize: '0.775rem', color: 'var(--text-secondary)' }}>
+                        {showingScenario.result.portfolio_id == null ? 'Simulated P&L (vs live cost)' : 'P&L if bought at simulated price (vs today)'}
+                      </div>
+                      <div className={`font-bold text-lg ${(showingScenario.result.portfolio_id == null ? showingScenario.result.profit_loss : (showingScenario.result.reverse_profit_loss ?? showingScenario.result.profit_loss)) >= 0 ? 'text-positive' : 'text-negative'}`} style={{ fontWeight: '800', fontSize: '1.1rem' }}>
+                        {(showingScenario.result.portfolio_id == null ? showingScenario.result.profit_loss : (showingScenario.result.reverse_profit_loss ?? showingScenario.result.profit_loss)) >= 0 ? '+' : ''}
+                        ${(showingScenario.result.portfolio_id == null ? showingScenario.result.profit_loss : (showingScenario.result.reverse_profit_loss ?? showingScenario.result.profit_loss)).toLocaleString(undefined, { minimumFractionDigits: 2 })} ({(showingScenario.result.portfolio_id == null ? showingScenario.result.profit_loss_percentage : (showingScenario.result.reverse_profit_loss_pct ?? showingScenario.result.profit_loss_percentage)).toFixed(2)}%)
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ fontWeight: '700', fontSize: '0.875rem', marginBottom: '8px' }}>
+                    Simulated Basket Position Details:
+                  </div>
+                  <div className="table-container">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          {showingScenario.result.portfolio_id == null && <th style={{ textAlign: 'right' }}>Hyp. Price</th>}
+                          {showingScenario.result.portfolio_id != null && <th style={{ textAlign: 'right' }}>Cost / Share</th>}
+                          {showingScenario.result.portfolio_id != null && <th style={{ textAlign: 'right' }}>Simulated Price</th>}
+                          <th style={{ textAlign: 'right' }}>Current Price (live)</th>
+                          <th style={{ textAlign: 'right' }}>Market Value</th>
+                          <th style={{ textAlign: 'right' }}>P&L</th>
+                          <th style={{ textAlign: 'right' }}>P&L %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {showingScenario.result.holdings.map((h, i) => {
+                          const isSandboxResult = showingScenario.result.portfolio_id == null;
+                          const costPrice = h.hypothetical_price ?? h.purchase_price ?? 0;
+                          const simPrice = h.current_price ?? 0;
+                          const livePrice = isSandboxResult
+                            ? (h.current_price ?? 0)
+                            : (h.live_price ?? h.current_price ?? 0);
+                          const qty = h.quantity ?? 1;
+                          const pl = isSandboxResult
+                            ? (h.profit_loss ?? 0)
+                            : (livePrice - simPrice) * qty;
+                          const plPct = isSandboxResult
+                            ? (h.profit_loss_percentage ?? 0)
+                            : (simPrice !== 0 ? ((livePrice - simPrice) / simPrice) * 100 : 0);
+                          const plClass = pl >= 0 ? 'text-positive' : 'text-negative';
+                          return (
+                            <tr key={i}>
+                              <td style={{ fontWeight: '800' }}>{h.symbol}</td>
+                              <td style={{ textAlign: 'right' }}>${costPrice.toFixed(2)}</td>
+                              {!isSandboxResult && <td style={{ textAlign: 'right' }}>${simPrice.toFixed(2)}</td>}
+                              <td style={{ textAlign: 'right' }}>${livePrice.toFixed(2)}</td>
+                              <td style={{ textAlign: 'right', fontWeight: '700' }}>
+                                ${(h.market_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </td>
+                              <td style={{ textAlign: 'right' }} className={plClass}>
+                                {pl >= 0 ? '+' : ''}${pl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </td>
+                              <td style={{ textAlign: 'right' }} className={plClass}>
+                                {pl >= 0 ? '+' : ''}{plPct.toFixed(2)}%
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
+                    {showingScenario.result.portfolio_id == null
+                      ? 'P&L = (Hyp. price − current price) × quantity. A target price above today\u2019s price shows a profit; below it shows a loss.'
+                      : 'P&L = (current live price − simulated price) × quantity. A simulated price below today\u2019s live price shows a profit (bought at the simulated price, held to today); above it shows a loss.'}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Saved What-If Scenario Ledger */}
       <div className="card" style={{ marginTop: '24px' }}>
         <div style={{ fontWeight: '700', fontSize: '1.15rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -588,35 +830,71 @@ export function WhatIfPage({ portfolio }) {
               <thead>
                 <tr>
                   <th>Scenario Name</th>
-                  <th>Security Symbol</th>
-                  <th style={{ textAlign: 'right' }}>Hypothetical Price</th>
+                  <th>Securities</th>
+                  <th style={{ textAlign: 'right' }}>Count</th>
                   <th>Source</th>
                   <th>Price Point</th>
                   <th>Target Date</th>
-                  <th style={{ textAlign: 'center' }}>Action</th>
+                  <th>Created</th>
+                  <th style={{ textAlign: 'center' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {savedEntries.map((row) => (
-                  <tr key={row.id}>
+                {Object.values(groupedScenarios).map((scenario) => (
+                  <tr key={scenario.scenario_name}>
                     <td>
                       <span className="badge badge-secondary" style={{ fontWeight: '700' }}>
-                        {row.scenario_name}
+                        {scenario.scenario_name}
                       </span>
                     </td>
-                    <td style={{ fontWeight: '800' }}>{row.symbol || 'N/A'}</td>
-                    <td style={{ textAlign: 'right', fontWeight: '700' }}>${row.hypothetical_price.toFixed(2)}</td>
-                    <td><span className="badge badge-secondary">{row.price_source}</span></td>
-                    <td>{row.price_type || 'manual'}</td>
-                    <td>{row.trade_date ? new Date(row.trade_date).toLocaleDateString() : 'N/A'}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        {scenario.entries.map((e) => (
+                          <span key={e.symbol} style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--accent-primary)' }}>
+                            {e.symbol} (${e.hypothetical_price.toFixed(2)})
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: '700' }}>{scenario.entries.length}</td>
+                    <td><span className="badge badge-secondary">{scenario.price_source}</span></td>
+                    <td>{scenario.price_type || 'manual'}</td>
+                    <td>{scenario.trade_date ? new Date(scenario.trade_date).toLocaleDateString() : 'N/A'}</td>
+                    <td>{scenario.created_at ? new Date(scenario.created_at).toLocaleDateString() : 'N/A'}</td>
                     <td style={{ textAlign: 'center' }}>
-                      <button
-                        className="btn btn-secondary btn-sm text-negative"
-                        onClick={() => handleDeleteEntry(row.id)}
-                        title="Delete scenario row"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => handleShowResults(scenario)}
+                          title="Show saved simulation results"
+                          disabled={loading}
+                          style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                        >
+                          <Play size={12} />
+                          <span>Show Results</span>
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => handleRecheck(scenario)}
+                          title="Re-run scenario with current live prices"
+                          disabled={loading}
+                          style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                        >
+                          <RefreshCw size={12} />
+                          <span>Recheck</span>
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm text-negative"
+                          onClick={() => {
+                            // Delete all entries for this scenario
+                            scenario.entries.forEach(e => handleDeleteEntry(e.id));
+                          }}
+                          title="Delete entire scenario"
+                          style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

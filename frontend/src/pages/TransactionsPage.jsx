@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Receipt, Filter, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
+import { Receipt, Filter, ArrowUpRight, ArrowDownRight, RefreshCw, Search } from 'lucide-react';
 import { api } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
 
@@ -7,6 +7,8 @@ export function TransactionsPage({ portfolio }) {
   const { isBrainrot } = useTheme();
   const [transactions, setTransactions] = useState([]);
   const [filterType, setFilterType] = useState('ALL');
+  const [filterSecurityType, setFilterSecurityType] = useState('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
@@ -44,9 +46,24 @@ export function TransactionsPage({ portfolio }) {
     return <div className="empty-state">No portfolio selected.</div>;
   }
 
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+
   const filtered = transactions.filter((t) => {
-    if (filterType === 'ALL') return true;
-    return t.type === filterType;
+    const txnType = String(t?.type || '').toUpperCase();
+    const securityType = String(t?.security_type || t?.securityType || '').toUpperCase();
+
+    if (filterType !== 'ALL' && txnType !== filterType) return false;
+    if (filterSecurityType !== 'ALL' && securityType !== filterSecurityType) return false;
+
+    if (normalizedSearchTerm) {
+      const ticker = String(t?.symbol || '').trim().toLowerCase();
+      const fallbackName = String(t?.name || '').trim().toLowerCase();
+      if (!ticker.includes(normalizedSearchTerm) && !fallbackName.includes(normalizedSearchTerm)) {
+        return false;
+      }
+    }
+
+    return true;
   });
 
   return (
@@ -69,7 +86,7 @@ export function TransactionsPage({ portfolio }) {
         <div className="card" style={{ flex: 1, minWidth: 0 }}>
         {/* Filters */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <Filter size={16} style={{ color: 'var(--text-secondary)' }} />
             <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-secondary)' }}>
               Filter Type:
@@ -86,10 +103,45 @@ export function TransactionsPage({ portfolio }) {
                 </button>
               ))}
             </div>
+            <div style={{ display: 'flex', gap: '6px', marginLeft: '16px', paddingLeft: '16px', borderLeft: '1px solid var(--border-color)' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Security:</span>
+              {['ALL', 'STOCK', 'BOND', 'CASH'].map((type) => (
+                <button
+                  key={type}
+                  className={`btn btn-sm ${filterSecurityType === type ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                  onClick={() => setFilterSecurityType(type)}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Showing <strong>{filtered.length}</strong> transactions
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ position: 'relative', width: '200px' }}>
+              <Search
+                size={16}
+                style={{
+                  position: 'absolute',
+                  left: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-secondary)',
+                }}
+              />
+              <input
+                type="text"
+                className="form-input"
+                style={{ paddingLeft: '36px', height: '32px', fontSize: '0.8rem' }}
+                placeholder="Search symbol..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Showing <strong>{filtered.length}</strong> transactions
+            </div>
           </div>
         </div>
 

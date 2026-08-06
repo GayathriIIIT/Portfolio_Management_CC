@@ -3,6 +3,7 @@ import { X, Wallet, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'INR', 'CNY', 'SGD'];
+const AMOUNT_SUGGESTIONS = [100, 200, 500, 1000, 2000, 5000, 10000];
 
 export function WalletModal({ isOpen, onClose, currency = 'USD', wallet = {}, onSuccess }) {
   const [actionType, setActionType] = useState('DEPOSIT');
@@ -47,6 +48,10 @@ export function WalletModal({ isOpen, onClose, currency = 'USD', wallet = {}, on
   }, [isOpen, actionType, fromCurrency, toCurrency]);
 
   if (!isOpen) return null;
+
+  const handleSuggestionClick = (suggestedAmount) => {
+    setAmount(String(suggestedAmount));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -238,6 +243,19 @@ export function WalletModal({ isOpen, onClose, currency = 'USD', wallet = {}, on
                 onChange={(e) => setAmount(e.target.value)}
                 required
               />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                {AMOUNT_SUGGESTIONS.map((suggestedAmount) => (
+                  <button
+                    key={suggestedAmount}
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                    onClick={() => handleSuggestionClick(suggestedAmount)}
+                  >
+                    {suggestedAmount >= 1000 ? `${suggestedAmount / 1000}k` : suggestedAmount}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

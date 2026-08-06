@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'pm_recent_tickers';
-const MAX = 12;
+const MAX = 15;
 
 export function getRecentTickers() {
   try {
@@ -19,11 +19,29 @@ export function rememberTicker(symbol, name = '') {
   if (!sym) return;
 
   const list = getRecentTickers().filter((t) => t.symbol !== sym);
-  list.unshift({ symbol: sym, name: name || '' });
+  list.unshift({ 
+    symbol: sym, 
+    name: name || '',
+    lastUsed: Date.now(),
+    useCount: 1
+  });
+
+  // Merge with existing if same symbol was found
+  const existingIdx = list.findIndex(t => t.symbol === sym);
+  if (existingIdx > 0) {
+    list[0].useCount = (list[existingIdx].useCount || 0) + 1;
+    list.splice(existingIdx, 1);
+  }
 
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, MAX)));
   } catch {
     // storage unavailable (private mode, quota, etc.) - fail silently
   }
+}
+
+export function clearTickerCache() {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {}
 }

@@ -224,6 +224,9 @@ def test_list_portfolio_what_if_entries(client):
     assert len(body) == 2
     assert {entry["symbol"] for entry in body} == {"AAPL", "MSFT"}
     assert {entry["scenario_name"] for entry in body} == {"tech crash", "rate cut"}
+    tech_entry = next(entry for entry in body if entry["scenario_name"] == "tech crash")
+    assert tech_entry["scenario_payload"]["scenario_name"] == "tech crash"
+    assert tech_entry["result_snapshot"]["scenario_name"] == "tech crash"
 
 
 def test_delete_portfolio_what_if_entry(client):

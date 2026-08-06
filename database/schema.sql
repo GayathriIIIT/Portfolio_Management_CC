@@ -133,6 +133,8 @@ CREATE TABLE whatif_price (
     price_type          VARCHAR(16),                            -- open | close (historical scenarios)
     trade_date          DATE,                                   -- used for historical what-if runs
     price_source        VARCHAR(16)   NOT NULL DEFAULT 'manual', -- manual | historical
+    scenario_payload    TEXT,                                   -- original request payload used to generate the scenario
+    result_snapshot     TEXT,                                   -- full result snapshot from the simulation run
     created_at          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_wp_portfolio
         FOREIGN KEY (portfolio_id) REFERENCES portfolio(id) ON DELETE CASCADE,
