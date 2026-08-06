@@ -633,6 +633,17 @@ body {
   position: relative;
 }
 
+.alerts-bell-wrap {
+  position: relative;
+}
+
+.alerts-popover {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -854,4 +865,74 @@ body {
 @keyframes brainrot-wiggle {
   0%, 100% { transform: rotate(-3deg) translateY(0); }
   50% { transform: rotate(3deg) translateY(-4px); }
+}
+
+/* Printable portfolio report */
+.report-sheet {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+}
+
+.report-header {
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--border-color);
+  margin-bottom: 16px;
+}
+
+.report-section {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 24px 0 10px;
+}
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.report-table th,
+.report-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.report-table th.r,
+.report-table td.r {
+  text-align: right;
+}
+
+@media print {
+  body { background: #ffffff; }
+  .sidebar,
+  .top-header,
+  .btn,
+  .theme-toggle-btn,
+  .sidebar-footer {
+    display: none !important;
+  }
+  .app-container,
+  .main-wrapper,
+  .page-content {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .report-sheet {
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+  .report-table th,
+  .report-table td {
+    color: #000;
+  }
 }
