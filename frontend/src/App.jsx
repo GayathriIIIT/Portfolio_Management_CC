@@ -307,6 +307,7 @@ export function AppContent() {
                 <TradePage
                   portfolio={activePortfolio}
                   walletBalance={walletBalance}
+                  currency={walletCurrency}
                   onTradeSuccess={refreshPortfolioData}
                 />
               )}
@@ -332,6 +333,7 @@ export function AppContent() {
         portfolioId={selectedPortfolioId}
         holdings={activePortfolio?.holdings || []}
         walletBalance={walletBalance}
+        currency={walletCurrency}
         initialType={tradeModal.type}
         initialSymbol={tradeModal.symbol}
         onTradeSuccess={refreshPortfolioData}
@@ -363,6 +365,7 @@ export function AppContent() {
         isOpen={isWalletModalOpen}
         onClose={() => setIsWalletModalOpen(false)}
         currency={walletCurrency}
+        wallet={wallet}
         onSuccess={() => {
           loadWallet();
           refreshPortfolioData();

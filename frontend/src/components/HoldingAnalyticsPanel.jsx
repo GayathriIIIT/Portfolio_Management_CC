@@ -21,7 +21,7 @@ const RANGES = [
 
 const RANGE_EXPECTED_DAYS = { '1m': 31, '3m': 92, '6m': 184, '1y': 366 };
 
-export function HoldingAnalyticsPanel({ symbol, onClose }) {
+export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
   const [range, setRange] = useState('1y');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -193,7 +193,7 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
                       fontSize={11}
                       tickLine={false}
                       axisLine={false}
-                      tickFormatter={(v) => `$${v}`}
+                      tickFormatter={(v) => `${currency} ${v}`}
                       domain={['auto', 'auto']}
                       width={64}
                     />
@@ -201,7 +201,7 @@ export function HoldingAnalyticsPanel({ symbol, onClose }) {
                       labelFormatter={(label) =>
                         new Date(label).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })
                       }
-                      formatter={(value) => [`$${Number(value).toFixed(2)}`, 'Close']}
+                      formatter={(value) => [`${currency} ${Number(value).toFixed(2)}`, 'Close']}
                       contentStyle={{
                         backgroundColor: 'var(--bg-card)',
                         border: '1px solid var(--border-color)',
