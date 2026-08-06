@@ -243,30 +243,40 @@ export function HoldingAnalyticsPanel({ symbol, currency = 'USD', onClose }) {
           <MetricGrid metrics={metrics} />
 
           {similar.length > 0 && (
-            <div style={{ marginTop: '16px' }}>
+            <div style={{ marginTop: '20px' }}>
               <div className="analytics-section-label">Similar stocks</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                 {similar.map((s) => (
                   <button
                     key={s.symbol}
                     className="btn btn-secondary"
                     style={{
-                      justifyContent: 'space-between',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '10px 14px',
+                      minWidth: '110px',
                       fontSize: '0.8rem',
-                      padding: '8px 12px',
+                      height: 'auto',
                     }}
                     title={`View ${s.symbol} analytics`}
                     onClick={() => setViewSymbol(s.symbol)}
                   >
-                    <span style={{ fontWeight: 700 }}>{s.symbol}</span>
-                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
-                      {s.name}
-                      {s.price != null ? ` · ${currency} ${Number(s.price).toFixed(2)}` : ''}
+                    <span className="badge badge-secondary" style={{ fontSize: '0.7rem', padding: '2px 8px' }}>
+                      {s.symbol}
                     </span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 600, fontSize: '0.78rem' }}>
+                      {s.name}
+                    </span>
+                    {s.price != null ? (
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>
+                        · {Number(s.price).toFixed(2)} {currency}
+                      </span>
+                    ) : null}
                   </button>
                 ))}
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '8px' }}>
                 Rule-based picks in the same sector, ranked by market-cap similarity to {viewSymbol}.
               </div>
             </div>

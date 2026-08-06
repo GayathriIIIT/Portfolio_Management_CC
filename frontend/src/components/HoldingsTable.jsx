@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, ArrowUpRight, ArrowDownRight, Plus, ShoppingCart, DollarSign, Activity, X, PencilLine } from 'lucide-react';
+import { Search, ArrowUpRight, ArrowDownRight, Plus, ShoppingCart, DollarSign, Activity, PencilLine } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { HoldingAnalyticsPanel } from './HoldingAnalyticsPanel';
 
@@ -13,7 +13,7 @@ export function HoldingsTable({
 }) {
   const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedSymbol, setExpandedSymbol] = useState(null);
+  const [analyticsHolding, setAnalyticsHolding] = useState(null);
 
   const handlePriceOverride = async (h) => {
     const current = h.price_override != null ? h.price_override : h.native_current_price;
@@ -133,7 +133,6 @@ export function HoldingsTable({
                 const isGain = (h.unrealized_pl || 0) >= 0;
                 const isCagrGain = (h.cagr || 0) >= 0;
                 const isCash = String(h.symbol || '').toUpperCase().endsWith('-CASH');
-                const isExpanded = expandedSymbol === h.id;
                 return (
                   <React.Fragment key={h.id}>
                     <tr>
@@ -187,15 +186,15 @@ export function HoldingsTable({
                           </button>
                         ) : (
                         <>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px' }}
-                          onClick={() => setExpandedSymbol(isExpanded ? null : h.id)}
-                          title="Show risk analytics for this security"
-                        >
-                          {isExpanded ? <X size={12} /> : <Activity size={12} />}
-                          <span>Analytics</span>
-                        </button>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '4px 8px' }}
+                            onClick={() => setAnalyticsHolding(h)}
+                            title="Show risk analytics for this security"
+                          >
+                            <Activity size={12} />
+                            <span>Analytics</span>
+                          </button>
                         {h.type === 'BOND' && onPriceOverride && (
                           <button
                             className="btn btn-secondary btn-sm"
@@ -231,23 +230,24 @@ export function HoldingsTable({
                         )}
                       </div>
                     </td>
-                  </tr>
-                  {isExpanded && (
-                    <tr>
-                      <td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                        <HoldingAnalyticsPanel
-                          symbol={h.symbol}
-                          currency={h.currency || currency}
-                          onClose={() => setExpandedSymbol(null)}
-                        />
-                      </td>
-                    </tr>
-                  )}
-                  </React.Fragment>
+                   </tr>
+                   </React.Fragment>
                 );
               })}
             </tbody>
           </table>
+         </div>
+       )}
+
+      {analyticsHolding && (
+        <div className="modal-overlay" onClick={() => setAnalyticsHolding(null)}>
+          <div className="modal-content modal-content--analytics" onClick={(e) => e.stopPropagation()}>
+            <HoldingAnalyticsPanel
+              symbol={analyticsHolding.symbol}
+              currency={analyticsHolding.currency || currency}
+              onClose={() => setAnalyticsHolding(null)}
+            />
+          </div>
         </div>
       )}
     </div>

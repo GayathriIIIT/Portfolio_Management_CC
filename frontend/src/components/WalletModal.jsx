@@ -238,6 +238,19 @@ export function WalletModal({ isOpen, onClose, currency = 'USD', wallet = {}, on
                 onChange={(e) => setAmount(e.target.value)}
                 required
               />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                {[100, 200, 500, 1000, 2000, 5000].map((sugg) => (
+                  <button
+                    key={sugg}
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.78rem', padding: '4px 10px', height: '30px' }}
+                    onClick={() => setAmount(String(sugg))}
+                  >
+                    {currency} {sugg.toLocaleString()}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
