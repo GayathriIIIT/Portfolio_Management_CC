@@ -310,7 +310,7 @@ export function PerformanceChart({ portfolioId, refreshKey = 0, currency = 'USD'
                 fontSize={12}
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(val) => `$${val}`}
+                tickFormatter={(val) => `${currency} ${val.toLocaleString(undefined, { notation: 'compact', maximumFractionDigits: 1 })}`}
                 domain={['auto', 'auto']}
               />
               {benchmark !== 'NONE' && (

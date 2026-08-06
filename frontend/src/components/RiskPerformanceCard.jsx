@@ -22,7 +22,7 @@ const RANGES = [
 
 const RANGE_EXPECTED_DAYS = { '1m': 31, '3m': 92, '6m': 184, '1y': 366 };
 
-function NAVTooltip({ active, payload }) {
+function NAVTooltip({ active, payload, currency = 'USD' }) {
   if (!active || !payload || !payload.length) return null;
   const point = payload[0];
   return (
@@ -38,13 +38,13 @@ function NAVTooltip({ active, payload }) {
     >
       <div style={{ color: 'var(--text-secondary)' }}>{point.payload.date}</div>
       <div style={{ fontWeight: '700', color: 'var(--accent-primary)' }}>
-        ${Number(point.value).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        {currency} {Number(point.value).toLocaleString(undefined, { maximumFractionDigits: 2 })}
       </div>
     </div>
   );
 }
 
-export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
+export function RiskPerformanceCard({ portfolioId, refreshKey = 0, currency = 'USD' }) {
   const [range, setRange] = useState('all');
   const [includeCash, setIncludeCash] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -237,8 +237,8 @@ export function RiskPerformanceCard({ portfolioId, refreshKey = 0 }) {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                   <XAxis dataKey="date" stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(d) => d.slice(5)} />
-                  <YAxis stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v.toLocaleString(undefined, { notation: 'compact' })}`} domain={['auto', 'auto']} />
-                  <Tooltip content={<NAVTooltip />} />
+                  <YAxis stroke="var(--text-secondary)" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `${currency} ${v.toLocaleString(undefined, { notation: 'compact' })}`} domain={['auto', 'auto']} />
+                  <Tooltip content={<NAVTooltip currency={currency} />} />
                   <Area type="monotone" dataKey="value" stroke="var(--accent-primary)" strokeWidth={2} dot={false} fill="url(#riskNavGradient)" />
                 </AreaChart>
               </ResponsiveContainer>

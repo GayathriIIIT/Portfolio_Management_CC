@@ -5,6 +5,7 @@ Skills:
 - `full-check` — pre-commit/pre-PR gate: backend tests + frontend lint + frontend build.
 - `add-api-endpoint` — conventions for adding/changing a Flask route in `backend/app/api`.
 - `financial-metrics` — invariants for the return/CAGR/XIRR logic in `backend/app/api/portfolios.py`.
+- `db-schema` — check the live MySQL schema, diff it against the Flask models, and run ALTER/CREATE migrations.
 
 These reference the scripts in `.github/scripts/` directly — keep both in sync when either changes.
 

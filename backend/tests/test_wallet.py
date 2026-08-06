@@ -104,3 +104,61 @@ def test_sell_credits_wallet(client):
 
     client.post(f"/api/portfolios/{portfolio['id']}/sell", json={"symbol": "AAPL", "quantity": 1, "price": 250.0})
     assert _wallet_usd(client)["balance"] == 850.0
+
+
+# ---------------------------------------------------------------------------
+# Currency exchange
+# ---------------------------------------------------------------------------
+def test_exchange_converts_between_currencies(client, app, monkeypatch):
+    from app.services.market_price_service import MarketPriceService
+
+    def fake_fx(self, from_ccy, to_ccy, strict=False):
+        table = {("USD", "EUR"): 0.8, ("EUR", "USD"): 1.25}
+        return table.get((from_ccy.upper(), to_ccy.upper()), 1.0)
+
+    monkeypatch.setattr(MarketPriceService, "get_fx_rate", fake_fx)
+
+    client.post("/api/wallet/deposit", json={"amount": 1000.0, "currency": "USD"})
+
+    resp = client.post("/api/wallet/exchange", json={"from": "USD", "to": "EUR", "amount": 100.0})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["rate"] == 0.8
+    assert body["received"] == 80.0
+
+    wallet = {w["currency"]: w["balance"] for w in client.get("/api/wallet").get_json()}
+    assert wallet["USD"] == 900.0
+    assert wallet["EUR"] == 80.0
+
+
+def test_exchange_rejects_same_currency(client):
+    client.post("/api/wallet/deposit", json={"amount": 100.0, "currency": "USD"})
+    resp = client.post("/api/wallet/exchange", json={"from": "USD", "to": "USD", "amount": 10.0})
+    assert resp.status_code == 400
+    assert "into itself" in resp.get_json()["error"]
+
+
+def test_exchange_rejects_bad_iso_currency(client):
+    client.post("/api/wallet/deposit", json={"amount": 100.0, "currency": "USD"})
+    resp = client.post("/api/wallet/exchange", json={"from": "US", "to": "EUR", "amount": 10.0})
+    assert resp.status_code == 400
+    assert "3-letter ISO currency" in resp.get_json()["error"]
+
+
+def test_exchange_insufficient_balance_rejected(client):
+    resp = client.post("/api/wallet/exchange", json={"from": "USD", "to": "EUR", "amount": 500.0})
+    assert resp.status_code == 400
+    assert "Insufficient" in resp.get_json()["error"]
+
+
+def test_exchange_fails_on_unavailable_rate(client, app, monkeypatch):
+    from app.services.market_price_service import MarketPriceService
+
+    def fake_fx(self, from_ccy, to_ccy, strict=False):
+        raise Exception("no pair")
+
+    monkeypatch.setattr(MarketPriceService, "get_fx_rate", fake_fx)
+    client.post("/api/wallet/deposit", json={"amount": 1000.0, "currency": "USD"})
+    resp = client.post("/api/wallet/exchange", json={"from": "USD", "to": "EUR", "amount": 50.0})
+    assert resp.status_code == 502
+    assert "Could not fetch FX rate" in resp.get_json()["error"]

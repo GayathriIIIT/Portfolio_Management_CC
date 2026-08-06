@@ -530,6 +530,21 @@ def _get_live_price(symbol):
     return float(quote["price"])
 
 
+def _security_fx_rate(portfolio, symbol):
+    """FX rate to convert a security's native quote into the portfolio's base
+    currency for cash settlement. Returns 1.0 (identity) when the security's
+    currency can't be resolved or the rate can't be fetched — the same tolerant
+    fallback the rest of the reporting stack uses."""
+    base = (portfolio.base_currency or "USD").upper()
+    sec_curr = base
+    try:
+        info = _price_service().get_security_info(symbol) or {}
+        sec_curr = (info.get("currency") or base).upper()
+    except Exception:
+        sec_curr = base
+    return _price_service().get_fx_rate(sec_curr, base)
+
+
 def _coerce_date(value):
     d = None
     if isinstance(value, datetime):
@@ -1142,6 +1157,11 @@ def get_portfolio_chart_data(portfolio_id):
         benchmark_data = market_price_service.collect_benchmark_series(benchmark_sym.strip(), range_key=range_key)
 
     series = []
+    # FX rates are fetched once per distinct currency and reused across every
+    # point, so a foreign-currency holding is charted in the portfolio's base
+    # currency. The rate service caches the underlying Yahoo lookup.
+    base_curr = (portfolio.base_currency or "USD").upper()
+    fx_cache = {"_base": base_curr}
     for holding in portfolio.holdings:
         if holding.security.type in {"CASH"}:
             continue
@@ -1151,7 +1171,16 @@ def get_portfolio_chart_data(portfolio_id):
             range_key,
             db_session=db.session,
         )
-        series.append({"symbol": holding.security.symbol, "points": points})
+        sec_currency = (holding.security.currency or base_curr).upper()
+        rate = fx_cache.get(sec_currency)
+        if rate is None:
+            rate = _price_service().get_fx_rate(sec_currency, base_curr) or 1.0
+            fx_cache[sec_currency] = rate
+        if rate != 1.0:
+            points = [
+                {**pt, "price": round(float(pt["price"]) * rate, 4)} for pt in points
+            ]
+        series.append({"symbol": holding.security.symbol, "currency": sec_currency, "points": points})
 
     return jsonify(
         {
@@ -1160,6 +1189,7 @@ def get_portfolio_chart_data(portfolio_id):
             "series": series,
             "points": series[0]["points"] if series else [],
             "benchmark": benchmark_data,
+            "base_currency": base_curr,
         }
     )
 
@@ -1653,7 +1683,9 @@ def add_holding(portfolio_id):
     symbol = _require_string(payload, "symbol").upper()
     quantity = _require_positive_int(payload, "quantity")
     purchase_price = _require_positive_number(payload, "purchase_price")
-    total_cost = purchase_price * quantity
+    # The purchase price is the security's native quote; the wallet lives in the
+    # portfolio's base currency, so the cash settlement is FX-converted.
+    total_cost = purchase_price * quantity * _security_fx_rate(portfolio, symbol)
 
     try:
         # Debit the user's global wallet. The wallet is shared across portfolios
@@ -1748,7 +1780,10 @@ def buy_holding(portfolio_id):
         raise ApiError("'fees' must be a non-negative number")
     fees = float(fees)
 
-    total_cost = (price * quantity) + fees
+    # Native order total, FX-converted into the base-currency wallet: the order
+    # price is the security's native quote and the wallet is denominated in the
+    # portfolio's base currency.
+    total_cost = (price * quantity + fees) * _security_fx_rate(portfolio, symbol)
 
     try:
         # Debit the user's global wallet (shared across portfolios). A wallet
@@ -1848,7 +1883,8 @@ def sell_holding(portfolio_id):
         raise ApiError("'fees' must be a non-negative number")
     fees = float(fees)
 
-    net_proceeds = (price * quantity) - fees
+    # Native net proceeds, FX-converted into the base-currency wallet.
+    net_proceeds = (price * quantity - fees) * _security_fx_rate(portfolio, symbol)
     if net_proceeds < 0:
         raise ApiError("Brokerage fees exceed trade proceeds", status_code=400)
 
@@ -1958,7 +1994,7 @@ def delete_holding(portfolio_id, holding_id):
         except UnknownTickerError:
             price = float(holding.avg_cost)
 
-        net_proceeds = price * quantity
+        net_proceeds = price * quantity * _security_fx_rate(portfolio, symbol)
 
         wallet = _ensure_wallet(portfolio.base_currency)
         wallet.balance = float(wallet.balance) + net_proceeds

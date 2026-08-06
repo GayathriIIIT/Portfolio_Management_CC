@@ -36,12 +36,12 @@ export function DashboardPage({
       <KPICards analytics={analytics} currency={portfolio.base_currency} />
 
       {/* Risk & Performance */}
-      <RiskPerformanceCard portfolioId={portfolio.id} refreshKey={refreshKey} />
+      <RiskPerformanceCard portfolioId={portfolio.id} refreshKey={refreshKey} currency={portfolio.base_currency} />
 
       {/* Charts Grid */}
       <div className="grid-2">
         <PerformanceChart portfolioId={portfolio.id} currency={portfolio.base_currency} refreshKey={refreshKey} />
-        <AssetAllocationChart holdings={analytics?.holdings || []} />
+        <AssetAllocationChart holdings={analytics?.holdings || []} currency={portfolio.base_currency} />
       </div>
 
       {/* Holdings Table */}

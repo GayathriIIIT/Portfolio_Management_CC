@@ -64,6 +64,8 @@ export const api = {
   getWallet: () => request('/api/wallet'),
   depositWallet: (payload) => request('/api/wallet/deposit', { method: 'POST', body: payload }),
   withdrawWallet: (payload) => request('/api/wallet/withdraw', { method: 'POST', body: payload }),
+  exchangeWallet: (payload) => request('/api/wallet/exchange', { method: 'POST', body: payload }),
+  getFxRate: (from, to) => request(`/api/wallet/rate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
 
   // Ledger / Transactions History
   getTransactions: (portfolioId) => request(`${API_BASE}/${portfolioId}/transactions`),

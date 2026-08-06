@@ -41,10 +41,10 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
 
       if (actionType === 'DEPOSIT') {
         await api.depositCash(portfolioId, payload);
-        setSuccessMsg(`Added $${amtVal.toFixed(2)} of cash to this portfolio!`);
+        setSuccessMsg(`Added ${currency} ${amtVal.toFixed(2)} of cash to this portfolio!`);
       } else {
         await api.withdrawCash(portfolioId, payload);
-        setSuccessMsg(`Removed $${amtVal.toFixed(2)} of cash from this portfolio!`);
+        setSuccessMsg(`Removed ${currency} ${amtVal.toFixed(2)} of cash from this portfolio!`);
       }
 
       setTimeout(() => {
@@ -107,7 +107,7 @@ export function ManageCashModal({ isOpen, onClose, portfolioId, baseCurrency = '
           </div>
 
           <div className="form-group">
-            <label className="form-label">Amount ($)</label>
+            <label className="form-label">Amount ({currency})</label>
             <input
               type="number"
               step="0.01"

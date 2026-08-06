@@ -6,24 +6,25 @@ import { rememberTicker } from '../services/tickerCache';
 import { useTheme } from '../context/ThemeContext';
 import { useBrainrotToast } from '../context/BrainrotToastContext';
 
-const formatWallet = (val) =>
-  new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(val);
-
 export function TradeModal({
   isOpen,
   onClose,
   portfolioId,
   holdings = [],
   walletBalance = 0,
+  currency = 'USD',
   initialType = 'BUY',
   initialSymbol = '',
   onTradeSuccess,
 }) {
+  const formatMoney = (val) =>
+    new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(val);
+
   const [txnType, setTxnType] = useState(initialType);
   const [symbol, setSymbol] = useState(initialSymbol);
   const [quantity, setQuantity] = useState(1);
@@ -118,7 +119,7 @@ export function TradeModal({
         const buyTotal = priceVal * qty + feeVal;
         if (buyTotal > walletBalance) {
           throw new Error(
-            `Insufficient wallet balance. Order total: $${buyTotal.toFixed(2)}, Available: $${walletBalance.toFixed(2)}`
+            `Insufficient wallet balance. Order total: ${formatMoney(buyTotal)}, Available: ${formatMoney(walletBalance)}`
           );
         }
       }
@@ -243,7 +244,7 @@ export function TradeModal({
             </div>
             {quoteInfo && (
               <div style={{ fontSize: '0.8rem', color: 'var(--success-text)', marginTop: '4px', fontWeight: '500' }}>
-                ✓ Live Market Quote: {quoteInfo.name} ({quoteInfo.exchange}) - ${quoteInfo.price}
+                ✓ Live Market Quote: {quoteInfo.name} ({quoteInfo.exchange}) - {quoteInfo.currency ? `${quoteInfo.currency} ` : ''}{Number(quoteInfo.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             )}
           </div>
@@ -273,7 +274,7 @@ export function TradeModal({
             </div>
 
             <div className="form-group">
-              <label className="form-label">Execution Price ($)</label>
+              <label className="form-label">Execution Price ({currency})</label>
               <input
                 type="number"
                 step="0.01"
@@ -288,7 +289,7 @@ export function TradeModal({
 
           {/* Fees */}
           <div className="form-group">
-            <label className="form-label">Brokerage Fees ($)</label>
+            <label className="form-label">Brokerage Fees ({currency})</label>
             <input
               type="number"
               step="0.01"
@@ -317,13 +318,13 @@ export function TradeModal({
                 {txnType === 'SELL' ? 'Wallet after sale (estimated):' : 'Available in Wallet:'}
               </span>
               <span style={{ fontWeight: '700', fontSize: '0.95rem', color: 'var(--text-primary)' }}>
-                {formatWallet(walletBalance + (txnType === 'SELL' ? totalCost : 0))}
+                {formatMoney(walletBalance + (txnType === 'SELL' ? totalCost : 0))}
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '8px' }}>
               <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Total Estimated {txnType}:</span>
               <span style={{ fontWeight: '700', fontSize: '1.1rem', color: insufficientWallet ? 'var(--danger-text)' : 'var(--text-primary)' }}>
-                ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {formatMoney(totalCost)}
               </span>
             </div>
             {insufficientWallet && (
