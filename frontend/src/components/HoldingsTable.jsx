@@ -1,19 +1,42 @@
 import React, { useState } from 'react';
-import { Search, ArrowUpRight, ArrowDownRight, Plus, Trash2, ShoppingCart, DollarSign, Activity, X } from 'lucide-react';
+import { Search, ArrowUpRight, ArrowDownRight, Plus, ShoppingCart, DollarSign, Activity, X, PencilLine } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { HoldingAnalyticsPanel } from './HoldingAnalyticsPanel';
 
 export function HoldingsTable({
-  holdings = [],
+  holdings,
   currency = 'USD',
   onOpenTradeModal,
-  onDeleteHolding,
   onOpenCashModal,
+  onPriceOverride,
   showBuyPosition = true,
 }) {
   const { isBrainrot } = useTheme();
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedSymbol, setExpandedSymbol] = useState(null);
+
+  const handlePriceOverride = async (h) => {
+    const current = h.price_override != null ? h.price_override : h.native_current_price;
+    const raw = window.prompt(
+      `Set a manual current price for ${h.symbol} (in ${h.currency || 'USD'}). Leave blank to clear the override.`,
+      current != null ? String(current) : ''
+    );
+    if (raw === null) return;
+    const trimmed = raw.trim();
+    let value = null;
+    if (trimmed !== '') {
+      value = Number(trimmed);
+      if (isNaN(value) || value <= 0) {
+        window.alert('Price must be a positive number');
+        return;
+      }
+    }
+    try {
+      await onPriceOverride(h.id, value);
+    } catch (err) {
+      window.alert(err.message);
+    }
+  };
 
   const filteredHoldings = holdings.filter(
     (h) =>
@@ -173,6 +196,17 @@ export function HoldingsTable({
                           {isExpanded ? <X size={12} /> : <Activity size={12} />}
                           <span>Analytics</span>
                         </button>
+                        {h.type === 'BOND' && onPriceOverride && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ padding: '4px 8px' }}
+                            onClick={() => handlePriceOverride(h)}
+                            title="Set a manual current price override for this bond"
+                          >
+                            <PencilLine size={12} />
+                            <span>{h.price_override != null ? 'Override' : 'Price'}</span>
+                          </button>
+                        )}
                         {showBuyPosition && (
                           <button
                             className="btn btn-secondary btn-sm"
@@ -192,14 +226,6 @@ export function HoldingsTable({
                         >
                           <ShoppingCart size={12} />
                           <span>Sell</span>
-                        </button>
-                        <button
-                          className="btn btn-secondary btn-sm text-negative"
-                          style={{ padding: '4px 6px' }}
-                          onClick={() => onDeleteHolding(h.id)}
-                          title="Delete holding"
-                        >
-                          <Trash2 size={12} />
                         </button>
                         </>
                         )}

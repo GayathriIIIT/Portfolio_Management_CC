@@ -5,8 +5,8 @@ export function HoldingsPage({
   portfolio,
   analytics,
   onOpenTradeModal,
-  onDeleteHolding,
   onOpenCashModal,
+  onPriceOverride,
 }) {
   if (!portfolio) {
     return <div className="empty-state">No portfolio selected.</div>;
@@ -27,8 +27,8 @@ export function HoldingsPage({
         holdings={analytics?.holdings || []}
         currency={portfolio.base_currency}
         onOpenTradeModal={onOpenTradeModal}
-        onDeleteHolding={onDeleteHolding}
         onOpenCashModal={onOpenCashModal}
+        onPriceOverride={onPriceOverride}
       />
     </div>
   );

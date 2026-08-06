@@ -10,8 +10,8 @@ export function DashboardPage({
   analytics,
   refreshKey = 0,
   onOpenTradeModal,
-  onDeleteHolding,
   onOpenCashModal,
+  onPriceOverride,
 }) {
   if (!portfolio) {
     return (
@@ -49,8 +49,8 @@ export function DashboardPage({
         holdings={analytics?.holdings || []}
         currency={portfolio.base_currency}
         onOpenTradeModal={onOpenTradeModal}
-        onDeleteHolding={onDeleteHolding}
         onOpenCashModal={onOpenCashModal}
+        onPriceOverride={onPriceOverride}
         showBuyPosition={false}
       />
     </div>
