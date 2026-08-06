@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Calendar, Plus, X } from 'lucide-react';
+import { FlaskConical, Play, Trash2, TrendingUp, AlertCircle, Layers, Plus, X } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { useTheme } from '../context/ThemeContext';

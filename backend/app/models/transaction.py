@@ -4,7 +4,7 @@ TXN_TYPES = ("BUY", "SELL", "DEPOSIT", "WITHDRAW")
 
 
 class PortfolioTransaction(db.Model):
-    """Immutable ledger of BUY/SELL/DEPOSIT/WITHDRAW events. No API endpoints yet."""
+    """Immutable ledger of BUY/SELL/DEPOSIT/WITHDRAW events."""
 
     __tablename__ = "portfolio_transaction"
     __table_args__ = (

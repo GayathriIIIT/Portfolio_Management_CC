@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, DollarSign, Activity, Wallet } from 'lucide-react';
+import { Search, ArrowLeftRight, CheckCircle, AlertCircle, TrendingUp, Activity, Wallet } from 'lucide-react';
 import { api } from '../services/api';
 import { TickerAutocomplete } from '../components/TickerAutocomplete';
 import { rememberTicker } from '../services/tickerCache';
