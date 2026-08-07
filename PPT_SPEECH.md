@@ -115,3 +115,31 @@ Thank you — happy to take questions."
 
 16. **Why did you remove the "Save as Portfolio" and auto-load behavior on the what-if page?** — Auto-loading on every scenario change was making unnecessary network calls; we made the price graph opt-in ("Load Price Graph") so it only fetches when you actually want to see it.
 17. **Where does the price-path graph data come from?** — A new backend endpoint that returns each symbol's daily closes between the scenario's target date and today, reusing the same historical price cache the backfill feature already populates.
+
+### Portfolio / risk analytics
+
+18. **Why does the dashboard have both TWR and XIRR?** — They answer different questions: TWR measures the investment strategy itself, while XIRR measures how your timing of deposits and withdrawals affected your personal result.
+19. **Why is the annualized return hidden for short windows?** — Annualizing a tiny window produces misleading numbers, so we prefer to show nothing rather than exaggerate a 2-day or 2-week move.
+20. **Why can the chart be switched to exclude cash but the metrics stay the same?** — The toggle is meant to change the visual line only; the risk metrics stay anchored to the true portfolio value so the numbers do not drift when the user is just changing the view.
+21. **How do you make sure deposits do not count as profit?** — Deposits and withdrawals are treated as external cash flows and removed from the return math, so moving money into the account never shows up as fake performance.
+22. **What is Jensen's Alpha in plain English?** — It measures whether the portfolio beat what would be expected from its market risk alone, after accounting for the benchmark and risk-free rate.
+
+### Recommendation engine
+
+23. **Is the recommendation engine AI?** — No, it is a rule-based scoring system with explicit thresholds, so every verdict can be explained in plain English.
+24. **Why did you choose rules instead of machine learning?** — The project needed transparent, auditable decisions, and rules are easier to test and defend than a black-box model.
+25. **What makes the recommendation say Add, Hold, or Sell?** — It adds and subtracts points from metrics like Sharpe, drawdown, volatility, alpha, valuation, and concentration, then maps the final score to a verdict.
+
+### UI / product behavior
+
+26. **Why does the what-if tool use a separate price graph?** — It lets the user see how the scenario price compares with the historical path from the chosen date to today, instead of only showing a single simulated value.
+27. **Why keep cash as a separate wallet instead of just another holding?** — Cash is shared, tradable, and affects every buy and sell, so keeping it separate avoids mixing settlement logic with normal securities.
+28. **Why do you cache market data?** — Live market data is slow and rate-limited, so caching keeps the app responsive and reduces repeated API calls.
+29. **What happens when Yahoo Finance does not return a quote?** — The backend falls back to safer defaults or cached values where possible, so one bad symbol does not break the whole dashboard.
+
+### Technical / engineering
+
+30. **What was the hardest part to build correctly?** — The financial math, because it had to stay numerically stable and still match real portfolio behavior under deposits, withdrawals, and cash holdings.
+31. **How did you test the tricky math?** — The tests use synthetic transaction histories and fixed price series so the results are deterministic and do not depend on live market data.
+32. **Why is the transaction ledger immutable?** — It keeps the system auditable and lets every dashboard metric be reconstructed from a single source of truth.
+33. **What would you improve next if you had more time?** — Authentication, OpenAPI docs, CI/CD, more asset types, and a more advanced optimizer for allocation and rebalancing.
