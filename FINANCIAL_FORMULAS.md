@@ -4,6 +4,44 @@ This is a plain-English walkthrough of every financial formula the app computes,
 
 ---
 
+## 0. What Comes Straight From yfinance vs. What We Calculate
+
+It's worth being upfront about this split before diving into the formulas: yfinance hands us raw prices and reference data; every ratio, risk number, and P&L figure below is math we wrote ourselves on top of that raw data.
+
+### Directly from yfinance (no math on our side beyond unit/currency conversion)
+
+| Data | Where it comes from |
+|---|---|
+| Live/current price | `ticker.info` (`currentPrice`/`regularMarketPrice`/`lastPrice`/`previousClose`), falling back to last daily close |
+| Historical daily Open/High/Low/Close | `ticker.history(...)` — powers the price cache, NAV reconstruction, backfill, and the what-if price graph |
+| FX rates | Currency-pair tickers like `EURUSD=X` fetched the same way as a stock quote |
+| Risk-free rate | `^IRX` (13-week T-bill) closing yield, cached 6h — used as-is, just clamped to a sane range |
+| Company name, exchange, currency, sector | `ticker.info` fields (`longName`, `exchange`, `currency`, `sector`) |
+| Fundamentals: market cap, trailing/forward P/E, price-to-book, dividend yield, profit margin, trailing EPS | `ticker.info` — fed straight into the recommendation engine, not recalculated |
+| Benchmark series (SPY/QQQ/DIA/VT prices) | Same `ticker.history()` call as any other symbol — it's just another ticker to us |
+
+### Calculated by us (yfinance only supplies the raw prices/cash-flow inputs)
+
+| Metric | Built from |
+|---|---|
+| Daily Return | Consecutive yfinance closes, minus deposits/withdrawals |
+| TWR (Total Return) | Geometric chain of daily returns |
+| XIRR / CAGR (Annualized Return, per-holding and portfolio) | BUY/SELL/DEPOSIT/WITHDRAW cash flows + current market value, solved numerically |
+| Annualized Volatility | Std. dev. of daily returns × √252 |
+| Sharpe Ratio | (Annualized return − risk-free rate) ÷ annualized volatility |
+| Sortino Ratio | Same, but volatility measured only on down-days |
+| Max Drawdown | Running peak vs. trough on the reconstructed NAV curve |
+| Calmar Ratio | Annualized return ÷ max drawdown |
+| Beta | Covariance(portfolio, benchmark) ÷ Variance(benchmark) |
+| Correlation | Covariance ÷ (StdDev × StdDev) |
+| Jensen's Alpha | CAPM excess return using our beta + the risk-free rate |
+| Up/Down Capture | Portfolio return summed on benchmark-up days vs. benchmark-down days |
+| NAV reconstruction (daily portfolio value history) | Full ledger replayed day-by-day against yfinance's historical closes |
+| Unrealized P&L / market value | `(live_price − cost_basis) × qty`, using yfinance's live price as the only input |
+| Recommendation engine verdict (ADD/HOLD/SELL) | Rule-based logic over the calculated metrics above plus the raw fundamentals |
+
+---
+
 ## 1. Daily Return (the building block for everything else)
 
 **Plain English:** How much did the portfolio move, in percent, from yesterday to today?
@@ -176,6 +214,51 @@ Down-Capture = (sum of your returns on days the benchmark was negative) / (sum o
 scenario_impact = hypothetical_value − today's_live_value
 ```
 Read literally, if your hypothetical price is *higher* than today's, the value goes *up* — but we display the change from the market's perspective ("if it had already happened, what would today look like in hindsight"), so a bullish scenario (hypothetical above today) is framed as the gain you're *not yet* holding, and a bearish one as the loss you've *avoided so far*. This is intentional — it's meant to answer "what am I exposed to," not "what's my P&L right now."
+
+---
+
+## 14. The Recommendation Engine — How We Say "Add / Hold / Consider Reducing"
+
+**Plain English:** This is the one part of the app that isn't a formula with a single output — it's a **rule-based scoring system** (`recommendation.py`). Every risk metric and fundamental we've already calculated gets checked against a threshold; each check either adds points, subtracts points, or does nothing. At the end, the total score decides the verdict. Nothing here is machine learning — every rule is explicit and human-readable, and every rule that fires also produces a plain-English reason so the user can see *why*.
+
+**Step 1 — Gate on data first.** Before scoring anything: if there are no risk metrics at all, or fewer than 30 days of history and no signal fired, the engine returns **`INSUFFICIENT_DATA`** rather than guessing. This mirrors the same philosophy as the XIRR gating above — a noisy, short window doesn't get to masquerade as a confident call.
+
+**Step 2 — Score every signal that's available.** Each signal is independent and only contributes if its data exists:
+
+| Signal | Adds points when… | Subtracts points when… |
+|---|---|---|
+| Sharpe Ratio | ≥ 1.5 (+2) | < 0.0 (−2) |
+| Sortino Ratio | ≥ 2.0 (+1) | < 0.0 (−1) |
+| Max Drawdown | — | ≥ 25% (−2) |
+| Calmar Ratio | ≥ 1.0 (+1) | ≤ 0.2 (−1) |
+| Beta vs. SPY | < 0.8, i.e. calmer than the market (reason noted, no points) | > 1.3, swings harder than the market (−1) |
+| Correlation to SPY | < 0.5, genuine diversification (+1) | — (≥ 0.9 is noted as a reason, but doesn't subtract) |
+| Up/Down Capture | Up ≥ 120% **and** Down ≤ 80% — best of both worlds (+1) | Down ≥ 120% **and** Up ≤ 80% — worst of both worlds (−1) |
+| Annualized Volatility | ≤ 12%, calm ride (+1) | ≥ 40%, violent moves (−1) |
+| Worst Single Day | — | ≤ −8% (−1) |
+| Jensen's Alpha vs. SPY | ≥ +2.0 points (+1) | ≤ −2.0 points (−1) |
+| XIRR (Annualized Return) | ≥ 20% (+1) | ≤ 0% (−1) |
+| Overall P/L % | — | ≤ −20% (−1) |
+| Weighted P/E (valuation) | ≤ 14, cheap (+1) | ≥ 28, stretched (−1) |
+| Dividend Yield | ≥ 3%, income cushion (+1) | < 0.5%, noted as a reason (no points) |
+| Sector Concentration | — | Top sector ≥ 40% of holdings (−1) |
+
+**Step 3 — Convert the score into a verdict:**
+
+```
+score ≥ +3   →  ADD          ("Consider Adding")
+score ≤ −3   →  SELL         ("Consider Reducing")
+otherwise    →  HOLD         ("Hold")
+```
+
+If every signal came back neutral (no reasons fired at all) and there's enough history, the engine defaults to **HOLD** — "no strong signal" is itself a signal to do nothing, not a reason to force a verdict.
+
+**Confidence** is reported alongside the verdict, separate from the score itself:
+- **High** — the window has sufficient history (≥ 365 days) *and* at least 3 signals fired.
+- **Medium** — at least 1 signal fired, but not enough for high confidence.
+- **Low** — nothing fired, or not enough history to trust the call.
+
+**Why this design, not a single formula?** No single number (not even Sharpe or XIRR alone) captures "should I add, hold, or trim this position" — a great Sharpe ratio on a dangerously concentrated, overvalued position is still risky. Combining many independent, individually-explainable checks means the final verdict comes with a *reasoned list*, not a black-box number — and every threshold is a plain constant in the code, so it's auditable and tunable, not a trained model that could drift or hallucinate a reason.
 
 ---
 
