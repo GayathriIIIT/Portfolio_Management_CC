@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+﻿from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -1372,8 +1372,13 @@ def get_portfolio_risk(portfolio_id):
     if rf is None:
         rf = float(current_app.config.get("RISK_FREE_RATE", 4.0))
 
-    nav, _d0, external_flows = _reconstruct_nav_series(
-        portfolio, lookback_days=lookback_days, include_cash=include_cash
+    # Metrics always ride on the cash-included NAV, regardless of the "include
+    # cash" toggle — the toggle is a *display* choice for the graph only. If
+    # metrics were recomputed off the cash-excluded series, every risk number
+    # (volatility, Sharpe, drawdown, XIRR, alpha...) would silently shift when
+    # the user just wanted to see a different line on the chart.
+    metrics_nav, _d0, external_flows = _reconstruct_nav_series(
+        portfolio, lookback_days=lookback_days, include_cash=True
     )
 
     # Value-based metrics (total return, max drawdown, best/worst day, daily
@@ -1382,7 +1387,7 @@ def get_portfolio_risk(portfolio_id):
     # return. Risk-family metrics (annualized, Sharpe, beta, alpha) stay gated
     # inside compute_risk_metrics by sufficient_history, so a short window
     # simply leaves them None instead of blanking the whole card.
-    if not nav:
+    if not metrics_nav:
         response = dict(empty_response)
         response["message"] = (
             "The portfolio has no transactions to measure yet — add a deposit "
@@ -1390,24 +1395,33 @@ def get_portfolio_risk(portfolio_id):
         )
         return jsonify(response)
 
+    # The displayed graph series respects the toggle; reuse metrics_nav when
+    # cash is included so the common case doesn't reconstruct NAV twice.
+    if include_cash:
+        graph_nav = metrics_nav
+    else:
+        graph_nav, _, _ = _reconstruct_nav_series(
+            portfolio, lookback_days=lookback_days, include_cash=False
+        )
+
     # Benchmark (SPY) daily closes over the same window, forward-filled and
     # aligned to the NAV dates so beta/correlation/capture line up with the
     # portfolio's daily returns.
     bench_returns = None
     try:
         bench_closes = market_price_service.collect_daily_closes(
-            "SPY", date.fromisoformat(nav[0]["date"]), nav[-1]["date"]
+            "SPY", date.fromisoformat(metrics_nav[0]["date"]), metrics_nav[-1]["date"]
         )
-        bench_returns = _align_benchmark_returns(bench_closes, nav)
+        bench_returns = _align_benchmark_returns(bench_closes, metrics_nav)
     except Exception:
         bench_returns = None
 
     # External (DEPOSIT/WITHDRAW) flows aligned to NAV days let compute_risk_metrics
     # build a Time-Weighted Return and skip deposit/withdraw "best days".
-    flows_aligned = [external_flows.get(pt["date"], 0.0) for pt in nav]
+    flows_aligned = [external_flows.get(pt["date"], 0.0) for pt in metrics_nav]
 
     metrics = compute_risk_metrics(
-        [pt["value"] for pt in nav],
+        [pt["value"] for pt in metrics_nav],
         bench_returns=bench_returns,
         rf_pct=rf,
         min_annualize_days=int(current_app.config.get("MIN_XIRR_HOLDING_DAYS", 365)),
@@ -1432,7 +1446,7 @@ def get_portfolio_risk(portfolio_id):
             "portfolio_id": portfolio.id,
             "metrics": metrics,
             "recommendation": recommendation,
-            "nav": nav,
+            "nav": graph_nav,
             "benchmark": "SPY",
             "range": range_key,
             "include_cash": include_cash,
