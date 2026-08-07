@@ -42,7 +42,40 @@ It's worth being upfront about this split before diving into the formulas: yfina
 
 ---
 
-## 1. Daily Return (the building block for everything else)
+## 1. NAV & NAV Reconstruction — "What was my portfolio worth on any given day?"
+
+**Plain English:** NAV stands for **Net Asset Value** — it's just the total value of everything in the portfolio on a given day: all your holdings valued at that day's price, plus whatever cash you're holding, converted into one common (base) currency. It's the single number that answers "what is this portfolio worth right now?" — and, when rebuilt for every day in the past, "what was it worth back then?"
+
+**Why we have to *reconstruct* it instead of just reading it:** remember the golden rule from Section 0 — we never store computed values, only inputs (the transaction ledger). That means there's no table anywhere with "portfolio value on March 3rd." To draw a performance chart, or to compute *any* of the risk metrics below (volatility, Sharpe, drawdown, beta...), we first need a full day-by-day history of portfolio value. Since it was never stored, we **rebuild it from scratch** every time it's needed, by replaying history. This is what `_reconstruct_nav_series` does.
+
+**How the reconstruction actually works, step by step:**
+
+1. **Pull the full ledger.** Every BUY, SELL, DEPOSIT, and WITHDRAW for the portfolio, in chronological order — this is the immutable, append-only source of truth.
+
+2. **Turn each transaction into two effects: a share-count change and a cash change.**
+   - BUY → shares held go up; cash goes down by `(quantity × price + fees)`, converted to the portfolio's base currency at that day's FX rate.
+   - SELL → shares held go down; cash goes up by `(quantity × price − fees)`.
+   - DEPOSIT → cash goes up by the deposited amount; this is also logged separately as an **external flow** (not a gain) — see Section 3 (TWR).
+   - WITHDRAW → cash goes down; also logged as an external flow.
+
+3. **Neutralize "unfunded" buys.** If a BUY happened without a matching prior deposit (common with seeded/demo data), replaying the ledger literally would push the running cash balance negative — which can't really happen. We find the single lowest point the running cash balance ever dips to across the whole history, and add exactly that much as invisible "opening capital" at day zero. This makes every buy/sell perfectly cash-neutral (money just moves from cash into a position and back) and, critically, means a big trade's *size* can never get misread as investment *profit*.
+
+4. **Walk forward one calendar day at a time, from the first transaction to today.** On each day:
+   - Apply any transactions dated that day (updating share counts and cash).
+   - Price every currently-held security at **that day's historical closing price** — pulled from Yahoo Finance / our price cache, **forward-filled** from the last known close on days with no trading (weekends, holidays), so the series never has gaps.
+   - Convert each position's value into the base currency using that day's FX rate.
+   - Add the running cash balance, with the portfolio's `{CCY}-CASH` position always priced at its face value of exactly 1.0 per unit.
+   - Sum it all up → that day's NAV.
+
+5. **Trim the "noise" at the start.** The very first few reconstructed days (before any position actually had a priced close) can be zero or near-zero. Measuring a percentage return off a ~$0 base produces absurd numbers, so those leading rows are dropped before the series is used for any calculation.
+
+6. **Anchor the final point to today's live value.** The reconstruction uses yesterday's closing prices, but the dashboard's "Portfolio Value" KPI uses *live*, real-time prices — so the two can drift apart slightly by the time you look at them. Rather than let the chart and the KPI card visibly disagree, we uniformly scale every point in the series by the same ratio so the *last* point exactly matches the live KPI. Scaling every point by the same factor preserves every day-to-day percentage return unchanged — it only removes the small end-of-series mismatch, it doesn't alter the shape of the history.
+
+**The output:** a plain list of `{date, value}` pairs (plus the separate list of external deposit/withdrawal flows). This single series is the raw material that powers the "Performance" chart on the dashboard, and it's what every risk metric in Sections 2–13 below is actually computed *from* — daily returns are just the day-over-day change in this NAV series.
+
+---
+
+## 2. Daily Return (the building block for everything else)
 
 **Plain English:** How much did the portfolio move, in percent, from yesterday to today?
 
@@ -55,7 +88,7 @@ daily_return = (today's value − yesterday's value − external_cash_flow) / ye
 
 ---
 
-## 2. Time-Weighted Return (TWR) — "Total Return"
+## 3. Time-Weighted Return (TWR) — "Total Return"
 
 **Plain English:** How well did your *investment strategy* perform, ignoring the timing and size of your deposits/withdrawals? This is the fair way to judge "did I pick good investments," independent of when you happened to add or remove cash.
 
@@ -69,7 +102,7 @@ where each `rᵢ` is the daily return from step 1 above.
 
 ---
 
-## 3. Money-Weighted Return (XIRR) — "Annualized Return / CAGR"
+## 4. Money-Weighted Return (XIRR) — "Annualized Return / CAGR"
 
 **Plain English:** What single, constant annual growth rate would explain all your actual cash going in and out, and what you're left holding today? Unlike TWR, this *does* care about timing — putting in a big chunk of money right before a rally boosts your XIRR, because your timing was good.
 
@@ -86,7 +119,7 @@ We solve for `r` numerically using **bisection** — repeatedly narrowing a rang
 
 ---
 
-## 4. Annualized Volatility — "How bumpy is the ride?"
+## 5. Annualized Volatility — "How bumpy is the ride?"
 
 **Plain English:** How much does your portfolio's daily return typically swing above or below its average, scaled up to a yearly figure?
 
@@ -100,7 +133,7 @@ annualized_volatility = daily_volatility × √252
 
 ---
 
-## 5. Sharpe Ratio — "Return per unit of total risk"
+## 6. Sharpe Ratio — "Return per unit of total risk"
 
 **Plain English:** Are you being paid enough extra return for the bumpiness you're taking on, compared to a "safe" investment like a T-bill?
 
@@ -115,7 +148,7 @@ Sharpe = (annualized_return − risk_free_rate) / annualized_volatility
 
 ---
 
-## 6. Sortino Ratio — "Return per unit of *bad* risk"
+## 7. Sortino Ratio — "Return per unit of *bad* risk"
 
 **Plain English:** Same idea as Sharpe, but it only counts the downside. Sharpe penalizes you for volatility even when the swings are *upward* (which nobody actually minds) — Sortino fixes that by only measuring how bumpy the *losing* days were.
 
@@ -129,7 +162,7 @@ We require at least 2 negative-return days in the window before computing this �
 
 ---
 
-## 7. Max Drawdown — "Worst-case pain"
+## 8. Max Drawdown — "Worst-case pain"
 
 **Plain English:** From the highest point your portfolio ever reached, how far did it fall before recovering? This is the number that answers "how bad could it have gotten if I'd needed my money at the worst possible moment?"
 
@@ -143,7 +176,7 @@ max_drawdown = the largest drawdown(t) seen across the whole period
 
 ---
 
-## 8. Calmar Ratio — "Return per unit of worst-case pain"
+## 9. Calmar Ratio — "Return per unit of worst-case pain"
 
 **Plain English:** How much annual return are you getting for the worst drawdown you had to sit through? It's Sharpe's cousin, but instead of comparing return to *volatility*, it compares return to the single worst peak-to-trough loss — which some investors find more intuitive than volatility ("I care less about day-to-day wobble and more about how bad my worst moment was").
 
@@ -155,7 +188,7 @@ Read as: a Calmar of 1.0 means your yearly return roughly equals your worst draw
 
 ---
 
-## 9. Beta — "How much do you move when the market moves?"
+## 10. Beta — "How much do you move when the market moves?"
 
 **Plain English:** If SPY (the S&P 500) moves 1%, how much does your portfolio typically move? A beta of 1.5 means you tend to move 1.5× as much as the market — more aggressive; a beta of 0.5 means you move about half as much — more defensive.
 
@@ -169,7 +202,7 @@ We only compute this once we have enough overlapping days of data (a configured 
 
 ---
 
-## 10. Correlation — "Do you move *with* the market, or independently?"
+## 11. Correlation — "Do you move *with* the market, or independently?"
 
 **Plain English:** Beta tells you *how much* you move when the market moves; correlation tells you *how reliably* you move together at all. A correlation near 1.0 means you almost always move the same direction as the market; near 0 means your moves are essentially unrelated to it; negative means you tend to move opposite.
 
@@ -182,7 +215,7 @@ We deliberately use *population* variance (dividing by `n`, not `n−1`) here to
 
 ---
 
-## 11. Jensen's Alpha — "Are you beating what the market/risk model predicts?"
+## 12. Jensen's Alpha — "Are you beating what the market/risk model predicts?"
 
 **Plain English:** Given how much market risk you took (your beta), CAPM (the Capital Asset Pricing Model) predicts a "fair" return you *should* have earned. Jensen's Alpha is the extra return you earned *above* that prediction — the part that isn't explained by simply being exposed to the market. Positive alpha = genuine outperformance; negative = underperformance relative to the risk you took.
 
@@ -195,7 +228,7 @@ This only gets computed once we're past the minimum annualization window — a s
 
 ---
 
-## 12. Up-Capture / Down-Capture — "How do you behave in good months vs. bad months?"
+## 13. Up-Capture / Down-Capture — "How do you behave in good months vs. bad months?"
 
 **Plain English:** Split all the days into "market went up" days and "market went down" days. Up-capture asks: on the market's good days, what percentage of that upside did you actually capture? Down-capture asks the same for bad days — ideally you want high up-capture (you participate in rallies) and low down-capture (you're shielded in selloffs).
 
@@ -207,7 +240,7 @@ Down-Capture = (sum of your returns on days the benchmark was negative) / (sum o
 
 ---
 
-## 13. What-If "Reverse P&L"
+## 14. What-If "Reverse P&L"
 
 **Plain English:** This isn't a classic financial formula, more a UX/framing decision — but it trips people up, so it's worth explaining. When you simulate a hypothetical price for your holdings, we show:
 ```
@@ -217,7 +250,7 @@ Read literally, if your hypothetical price is *higher* than today's, the value g
 
 ---
 
-## 14. The Recommendation Engine — How We Say "Add / Hold / Consider Reducing"
+## 15. The Recommendation Engine — How We Say "Add / Hold / Consider Reducing"
 
 **Plain English:** This is the one part of the app that isn't a formula with a single output — it's a **rule-based scoring system** (`recommendation.py`). Every risk metric and fundamental we've already calculated gets checked against a threshold; each check either adds points, subtracts points, or does nothing. At the end, the total score decides the verdict. Nothing here is machine learning — every rule is explicit and human-readable, and every rule that fires also produces a plain-English reason so the user can see *why*.
 
